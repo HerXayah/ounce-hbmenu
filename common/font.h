@@ -25,9 +25,20 @@ typedef struct {
 } ffnt_page_t;
 
 typedef struct {
+    #ifdef __SWITCH2__
+    // Switch 2 renders glyphs at up to 3x upstream's size (4K): a large
+    // glyph is wider than 127 pixels, so 8-bit fields would overflow.
+    uint16_t width, height;
+    int16_t posX, posY, advance, pitch;
+    #else
     uint8_t width, height;
     int8_t posX, posY, advance, pitch;
+    #endif
     const uint8_t* data;
+    #ifdef __SWITCH2__
+    bool inAtlas;        // drawn from the GPU glyph atlas, not data
+    uint16_t atlasX, atlasY;
+    #endif
 } glyph_t;
 
 //extern const ffnt_header_t tahoma24_nxfnt;//These tahoma fonts aren't used anymore.

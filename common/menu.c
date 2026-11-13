@@ -27,6 +27,10 @@ char *menuGetRootBasePath(void) {
     return rootPathBase;
 }
 
+static void launchMenuEntryConfirmed(void* arg) {
+    launchMenuEntry((menuEntry_s*)arg);
+}
+
 void launchMenuEntryTask(menuEntry_s* arg) {
     menuEntry_s* me = arg;
     if (me->type == ENTRY_TYPE_FOLDER)
@@ -34,6 +38,8 @@ void launchMenuEntryTask(menuEntry_s* arg) {
         //changeDirTask(me->path);
     else if(me->type == ENTRY_TYPE_THEME)
         launchApplyThemeTask(me);
+    else if (launchMenuEntryNeedsPlatformWarning(me))
+        menuCreateConfirmMsgBox(780, 300, textGetString(StrId_Switch1Warning), launchMenuEntryConfirmed, me);
     else
         launchMenuEntry(me);
 }
@@ -82,6 +88,11 @@ void launchMenuNetloaderTask() {
 }
 
 void launchMenuBackTask() {
+    if (hbmenu_state != HBMENU_NETLOADER_ACTIVE && menuIsConfirmMsgBoxOpen()) {
+        menuCloseMsgBox();
+        return;
+    }
+
     if(hbmenu_state == HBMENU_NETLOADER_ACTIVE) {
         netloaderSignalExit();
     }
@@ -98,7 +109,10 @@ void launchMenuBackTask() {
 void menuHandleAButton(void) {
     menu_s* menu = menuGetCurrent();
 
-    if (hbmenu_state != HBMENU_NETLOADER_ACTIVE && menuIsMsgBoxOpen()) {
+    if (hbmenu_state != HBMENU_NETLOADER_ACTIVE && menuIsConfirmMsgBoxOpen()) {
+        menuConfirmMsgBox();
+    }
+    else if (hbmenu_state != HBMENU_NETLOADER_ACTIVE && menuIsMsgBoxOpen()) {
         menuCloseMsgBox();
     }
     else if (menu->nEntries > 0 && (hbmenu_state == HBMENU_DEFAULT || hbmenu_state == HBMENU_THEME_MENU))
@@ -123,12 +137,12 @@ void menuHandleXButton(void) {
 }
 
 void menuStartupCommon(void) {
-    free(folder_icon_large);
-    free(folder_icon_small);
-    free(invalid_icon_large);
-    free(invalid_icon_small);
-    free(theme_icon_large);
-    free(theme_icon_small);
+    FreeImageBuffer(folder_icon_large);
+    FreeImageBuffer(folder_icon_small);
+    FreeImageBuffer(invalid_icon_large);
+    FreeImageBuffer(invalid_icon_small);
+    FreeImageBuffer(theme_icon_large);
+    FreeImageBuffer(theme_icon_small);
 
     ThemeLayoutObject *layoutobj = &themeCurrent.layoutObjects[ThemeLayoutId_MenuActiveEntryIcon];
     ThemeLayoutObject *layoutobj2 = &themeCurrent.layoutObjects[ThemeLayoutId_MenuListIcon];
@@ -137,15 +151,28 @@ void menuStartupCommon(void) {
     assetsGetData(AssetId_folder_icon, &data);
     folder_icon_large = downscaleImg(data->buffer, layoutobj->imageSize[0], layoutobj->imageSize[1], layoutobj->size[0], layoutobj->size[1], data->imageMode);
     folder_icon_small = downscaleImg(data->buffer, layoutobj->imageSize[0], layoutobj->imageSize[1], layoutobj2->size[0], layoutobj2->size[1], data->imageMode);
+    #ifdef __SWITCH2__
+    // The resized copies are drawn from the asset's vector too.
+    renderAliasImageVector(folder_icon_large, data->buffer);
+    renderAliasImageVector(folder_icon_small, data->buffer);
+    #endif
     assetsGetData(AssetId_invalid_icon, &data);
     invalid_icon_large = downscaleImg(data->buffer, layoutobj->imageSize[0], layoutobj->imageSize[1], layoutobj->size[0], layoutobj->size[1], data->imageMode);
     invalid_icon_small = downscaleImg(data->buffer, layoutobj->imageSize[0], layoutobj->imageSize[1], layoutobj2->size[0], layoutobj2->size[1], data->imageMode);
+    #ifdef __SWITCH2__
+    renderAliasImageVector(invalid_icon_large, data->buffer);
+    renderAliasImageVector(invalid_icon_small, data->buffer);
+    #endif
     if(themeGlobalPreset == THEME_PRESET_DARK)
         assetsGetData(AssetId_theme_icon_dark, &data);
     else
         assetsGetData(AssetId_theme_icon_light, &data);
     theme_icon_large = downscaleImg(data->buffer, layoutobj->imageSize[0], layoutobj->imageSize[1], layoutobj->size[0], layoutobj->size[1], data->imageMode);
     theme_icon_small = downscaleImg(data->buffer, layoutobj->imageSize[0], layoutobj->imageSize[1], layoutobj2->size[0], layoutobj2->size[1], data->imageMode);
+    #ifdef __SWITCH2__
+    renderAliasImageVector(theme_icon_large, data->buffer);
+    renderAliasImageVector(theme_icon_small, data->buffer);
+    #endif
 
     layoutobj = &themeCurrent.layoutObjects[ThemeLayoutId_FrontWave];
     computeFrontGradient(themeCurrent.frontWaveColor, layoutobj->size[1]);
@@ -185,6 +212,23 @@ bool menuIsNetloaderActive(void) {
     return hbmenu_state == HBMENU_NETLOADER_ACTIVE;
 }
 
+#ifdef __SWITCH2__
+// Switch 2 draws image buffers as cached GPU textures (switch2/render.h).
+static void drawImage(int x, int y, int width, int height, const uint8_t *image, ImageMode mode) {
+    enum RenderImageFormat format = mode == IMAGE_MODE_RGB24 ? RenderImageFormat_Rgb24 : RenderImageFormat_Rgba32;
+    renderImage(image, x, y, width, height, format, 0xffffffffu);
+}
+
+// Draws an image_width x image_height image at width x height, scaled on the GPU.
+static void drawImageScaled(int x, int y, int width, int height, const uint8_t *image, int image_width, int image_height, ImageMode mode) {
+    enum RenderImageFormat format = mode == IMAGE_MODE_RGB24 ? RenderImageFormat_Rgb24 : RenderImageFormat_Rgba32;
+    renderImageScaled(image, image_width, image_height, x, y, width, height, format, 0xffffffffu);
+}
+
+static void drawIcon(int x, int y, int width, int height, const uint8_t *image, color_t color) {
+    renderImage(image, x, y, width, height, RenderImageFormat_AlphaMask, color.abgr | 0xff000000u);
+}
+#else
 //Draws an RGB888 or RGBA8888 image.
 static void drawImage(int x, int y, int width, int height, const uint8_t *image, ImageMode mode) {
     int tmpx, tmpy;
@@ -224,6 +268,7 @@ static void drawIcon(int x, int y, int width, int height, const uint8_t *image, 
         }
     }
 }
+#endif
 
 static void drawEntry(menuEntry_s* me, int off_x, int is_active) {
     ThemeLayoutObject *layoutobj = &themeCurrent.layoutObjects[ThemeLayoutId_MenuList];
@@ -324,9 +369,14 @@ static void drawEntry(menuEntry_s* me, int off_x, int is_active) {
         }
     }
 
+    ImageMode iconmode = IMAGE_MODE_RGB24;
+    bool entryicon = false;
+
     if (me->icon_gfx_small && me->icon_gfx) {
         smallimg = me->icon_gfx_small;
         largeimg = me->icon_gfx;
+        iconmode = me->icon_mode;
+        entryicon = true;
     }
     else if (me->type == ENTRY_TYPE_FOLDER) {
         smallimg = folder_icon_small;
@@ -343,12 +393,23 @@ static void drawEntry(menuEntry_s* me, int off_x, int is_active) {
 
     if (smallimg) {
         layoutobj = &themeCurrent.layoutObjects[ThemeLayoutId_MenuListIcon];
-        drawImage(start_x + layoutobj->posStart[0], start_y + layoutobj->posStart[1], layoutobj->size[0], layoutobj->size[1], smallimg, IMAGE_MODE_RGB24);
+#ifdef __SWITCH2__
+        // The small icon is downscaled for a 720p screen and looks blocky once
+        // the menu is scaled for 1080p or 4K: scale the large icon instead.
+        const ThemeLayoutObject *largeobj = &themeCurrent.layoutObjects[ThemeLayoutId_MenuActiveEntryIcon];
+        if (entryicon)
+            drawImageScaled(start_x + layoutobj->posStart[0], start_y + layoutobj->posStart[1], layoutobj->size[0], layoutobj->size[1], largeimg, largeobj->size[0], largeobj->size[1], iconmode);
+        else
+            drawImage(start_x + layoutobj->posStart[0], start_y + layoutobj->posStart[1], layoutobj->size[0], layoutobj->size[1], smallimg, iconmode);
+#else
+        (void)entryicon;
+        drawImage(start_x + layoutobj->posStart[0], start_y + layoutobj->posStart[1], layoutobj->size[0], layoutobj->size[1], smallimg, iconmode);
+#endif
     }
 
     layoutobj = &themeCurrent.layoutObjects[ThemeLayoutId_MenuActiveEntryIcon];
     if (is_active && largeimg && layoutobj->visible) {
-        drawImage(layoutobj->posStart[0], layoutobj->posStart[1], layoutobj->size[0], layoutobj->size[1], largeimg, IMAGE_MODE_RGB24);
+        drawImage(layoutobj->posStart[0], layoutobj->posStart[1], layoutobj->size[0], layoutobj->size[1], largeimg, iconmode);
 
         shadow_start_y = layoutobj->posStart[1]+layoutobj->size[1];
         border_start_x = layoutobj->posStart[0];
@@ -490,6 +551,78 @@ color_t waveBlendAdd(color_t a, color_t b, float alpha) {
     return MakeColor(a.r*(1.0f-alpha) + b.r*alpha, a.g*(1.0f-alpha) + b.g*alpha, a.b*(1.0f-alpha) + b.b*alpha, 255);
 }
 
+#ifdef __SWITCH2__
+// Switch 2 draws the same columns as upstream as GPU rectangles. Rows that
+// upstream mixes with the existing pixel (the anti-aliased top edge, and
+// every row with enableWaveBlending) blend on the GPU instead of reading the
+// framebuffer back. Below them each column is one filled rectangle.
+// Columns do not overlap, so all edge rows are drawn before all fills; this
+// keeps the fills, which may use the gradient texture, in one draw.
+typedef struct {
+    float top_y;      // upstream's wave_top_y
+    int fill_start_y; // first row of the filled rectangle
+    int end_y;        // one past the last row upstream draws
+} waveColumn_s;
+
+static waveColumn_s waveColumnAt(int id, int x, float timer, int height, float phase, float speed) {
+    waveColumn_s column;
+    int y;
+
+    column.top_y = approxSin(x*speed/1280.0+timer+phase) * 10.0 + height;
+
+    // Upstream stops at 720, or for waves 0 and 1 after y > top + 30.
+    column.end_y = 720;
+    if (id != 2 && floorf(column.top_y + 30) + 1 < column.end_y)
+        column.end_y = floorf(column.top_y + 30) + 1;
+
+    // Upstream blends rows with alpha (y - top) below 1.0 when wave blending,
+    // and anti-aliases rows below 0.3 otherwise; the rest are uniform.
+    float edge_alpha = themeCurrent.enableWaveBlending ? 1.0 : 0.3;
+    y = column.top_y;
+    while (y < column.end_y && y - column.top_y < edge_alpha)
+        y++;
+    column.fill_start_y = y;
+
+    return column;
+}
+
+static uint32_t waveAlpha(float coverage) {
+    return (uint32_t)roundf(clamp(coverage, 0.0, 1.0) * 255.0f) << 24;
+}
+
+void drawWave(int id, float timer, color_t color, int height, float phase, float speed) {
+    int x, y;
+    float alpha;
+    uint32_t rgb = color.abgr & 0xffffffu;
+    waveColumn_s column;
+
+    if (height < 0 || height > 720) return;
+    height = 720 - height;
+
+    for (x=0; x<1280; x++) {
+        column = waveColumnAt(id, x, timer, height, phase, speed);
+
+        for (y=column.top_y; y<column.fill_start_y; y++) {
+            alpha = y-column.top_y;
+            if (themeCurrent.enableWaveBlending)
+                renderRect(x, y, x+1, y+1, rgb | waveAlpha(clamp(alpha, 0.0, 1.0) * 0.3));
+            else // anti-aliasing
+                renderRect(x, y, x+1, y+1, rgb | waveAlpha(1.0 - fabs(alpha)));
+        }
+    }
+
+    for (x=0; x<1280; x++) {
+        column = waveColumnAt(id, x, timer, height, phase, speed);
+
+        if (themeCurrent.enableWaveBlending)
+            renderRect(x, column.fill_start_y, x+1, column.end_y, rgb | waveAlpha(0.3));
+        else if (id == 2)
+            renderGradientRect(x, column.fill_start_y, x+1, column.end_y, &frontWaveGradient[0].abgr);
+        else
+            renderRect(x, column.fill_start_y, x+1, column.end_y, rgb | 0xff000000u);
+    }
+}
+#else
 void drawWave(int id, float timer, color_t color, int height, float phase, float speed) {
     int x, y;
     float wave_top_y, alpha, one_minus_alpha;
@@ -530,6 +663,7 @@ void drawWave(int id, float timer, color_t color, int height, float phase, float
         }
     }
 }
+#endif
 
 void drawCharge() {
     char chargeString[5];

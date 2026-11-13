@@ -15,14 +15,16 @@ void menuEntryFree(menuEntry_s* me, bool skip_icongfx) {
 
     if (!skip_icongfx) {
         if (me->icon_gfx) {
-            free(me->icon_gfx);
+            FreeImageBuffer(me->icon_gfx);
             me->icon_gfx = NULL;
         }
 
         if (me->icon_gfx_small) {
-            free(me->icon_gfx_small);
+            FreeImageBuffer(me->icon_gfx_small);
             me->icon_gfx_small = NULL;
         }
+
+        me->icon_mode = IMAGE_MODE_RGB24;
     }
 
     if (me->nacp) {
@@ -106,20 +108,21 @@ static bool menuEntryLoadExternalIcon(menuEntry_s* me, const char* path, bool da
     return ok;
 }
 
-static bool menuEntryImportIconGfx(menuEntry_s* me, uint8_t* icon_gfx, uint8_t* icon_gfx_small) {
+static bool menuEntryImportIconGfx(menuEntry_s* me, uint8_t* icon_gfx, uint8_t* icon_gfx_small, ImageMode mode) {
     size_t tmpsize;
+    size_t bytes_per_pixel = mode == IMAGE_MODE_RGBA32 ? 4 : 3;
 
     if (icon_gfx == NULL || icon_gfx_small == NULL) return false;
 
     ThemeLayoutObject *layoutobj = &themeCurrent.layoutObjects[ThemeLayoutId_MenuActiveEntryIcon];
     ThemeLayoutObject *layoutobj2 = &themeCurrent.layoutObjects[ThemeLayoutId_MenuListIcon];
 
-    tmpsize = layoutobj->size[0]*layoutobj->size[1]*3;
+    tmpsize = layoutobj->size[0]*layoutobj->size[1]*bytes_per_pixel;
     me->icon_gfx = (uint8_t*)malloc(tmpsize);
     if (me->icon_gfx) memcpy(me->icon_gfx, icon_gfx, tmpsize);
 
     if (me->icon_gfx) {
-        tmpsize = layoutobj2->size[0]*layoutobj2->size[1]*3;
+        tmpsize = layoutobj2->size[0]*layoutobj2->size[1]*bytes_per_pixel;
         me->icon_gfx_small = (uint8_t*)malloc(tmpsize);
         if (me->icon_gfx_small) memcpy(me->icon_gfx_small, icon_gfx_small, tmpsize);
 
@@ -128,6 +131,8 @@ static bool menuEntryImportIconGfx(menuEntry_s* me, uint8_t* icon_gfx, uint8_t* 
             me->icon_gfx = NULL;
         }
     }
+
+    if (me->icon_gfx && me->icon_gfx_small) me->icon_mode = mode;
 
     return me->icon_gfx && me->icon_gfx_small;
 }
@@ -517,7 +522,7 @@ bool menuEntryLoad(menuEntry_s* me, const char* name, bool shortcut, bool check_
             if (iconLoaded && !(me->icon_gfx && me->icon_gfx_small)) iconLoaded = 0;
 
             if (!iconLoaded && fileassoc_me->icon_gfx && fileassoc_me->icon_gfx_small)
-                iconLoaded = menuEntryImportIconGfx(me, fileassoc_me->icon_gfx, fileassoc_me->icon_gfx_small);
+                iconLoaded = menuEntryImportIconGfx(me, fileassoc_me->icon_gfx, fileassoc_me->icon_gfx_small, fileassoc_me->icon_mode);
 
             //Attempt to load the nacp from {me->path filepath with extension .nacp}, then on failure use the config from fileassoc_me.
             memset(tempbuf, 0, sizeof(tempbuf));
@@ -602,6 +607,7 @@ void menuEntryFileassocLoad(const char* filepath) {
 
     uint8_t *app_icon_gfx = NULL;
     uint8_t *app_icon_gfx_small = NULL;
+    ImageMode app_icon_mode = IMAGE_MODE_RGB24;
 
     config_init(&cfg);
 
@@ -644,6 +650,7 @@ void menuEntryFileassocLoad(const char* filepath) {
                             app_version[sizeof(app_version)-1] = 0;
                             app_icon_gfx = me->icon_gfx;
                             app_icon_gfx_small = me->icon_gfx_small;
+                            app_icon_mode = me->icon_mode;
                             success = 1;
                         }
 
@@ -698,7 +705,7 @@ void menuEntryFileassocLoad(const char* filepath) {
                                 if (iconLoaded) {
                                     menuEntryParseIcon(me);
                                 } else {
-                                    iconLoaded = menuEntryImportIconGfx(me, app_icon_gfx, app_icon_gfx_small);
+                                    iconLoaded = menuEntryImportIconGfx(me, app_icon_gfx, app_icon_gfx_small, app_icon_mode);
                                 }
 
                                 argData_s* ad = &me->args;
@@ -728,11 +735,54 @@ void menuEntryFileassocLoad(const char* filepath) {
     }
 
     if (success) {
-        free(app_icon_gfx);
-        free(app_icon_gfx_small);
+        FreeImageBuffer(app_icon_gfx);
+        FreeImageBuffer(app_icon_gfx_small);
     }
 
     config_destroy(&cfg);
+}
+
+static const uint8_t png_signature[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+
+// Gives each fully transparent pixel the average colour of its visible
+// neighbours. Icons are filtered when they are scaled, and the colour stored in
+// a transparent pixel (often black) would otherwise darken the icon's edge.
+static void bleedTransparentPixels(uint8_t *pixels, int width, int height) {
+    size_t size = (size_t)width*height*4;
+    uint8_t *source = (uint8_t*)malloc(size);
+    if (source == NULL) return;
+    memcpy(source, pixels, size);
+
+    for (int y=0; y<height; y++) {
+        for (int x=0; x<width; x++) {
+            uint8_t *pixel = &pixels[((size_t)y*width + x)*4];
+            if (pixel[3] != 0) continue;
+
+            unsigned int sum[3] = {0, 0, 0};
+            unsigned int count = 0;
+            for (int dy=-1; dy<=1; dy++) {
+                for (int dx=-1; dx<=1; dx++) {
+                    int nx = x + dx, ny = y + dy;
+                    if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+
+                    const uint8_t *neighbour = &source[((size_t)ny*width + nx)*4];
+                    if (neighbour[3] == 0) continue;
+
+                    sum[0] += neighbour[0];
+                    sum[1] += neighbour[1];
+                    sum[2] += neighbour[2];
+                    count++;
+                }
+            }
+
+            if (count == 0) continue;
+            pixel[0] = sum[0] / count;
+            pixel[1] = sum[1] / count;
+            pixel[2] = sum[2] / count;
+        }
+    }
+
+    free(source);
 }
 
 void menuEntryParseIcon(menuEntry_s* me) {
@@ -741,15 +791,25 @@ void menuEntryParseIcon(menuEntry_s* me) {
     ThemeLayoutObject *layoutobj = &themeCurrent.layoutObjects[ThemeLayoutId_MenuActiveEntryIcon];
     ThemeLayoutObject *layoutobj2 = &themeCurrent.layoutObjects[ThemeLayoutId_MenuListIcon];
 
-    size_t imagesize = layoutobj->imageSize[0]*layoutobj->imageSize[1]*3;
+    // Icons are JPEG, or PNG, which can have transparency.
+    bool is_png = me->icon_size >= sizeof(png_signature) && memcmp(me->icon, png_signature, sizeof(png_signature)) == 0;
+    ImageMode mode = is_png ? IMAGE_MODE_RGBA32 : IMAGE_MODE_RGB24;
+
+    size_t imagesize = layoutobj->imageSize[0]*layoutobj->imageSize[1]*(is_png ? 4 : 3);
     bool ret=true;
     uint8_t *tmp_gfx = (uint8_t*)malloc(imagesize);
 
     if (tmp_gfx == NULL) ret = false;
 
-    if (ret) ret = assetsLoadJpgFromMemory(me->icon, me->icon_size, tmp_gfx, IMAGE_MODE_RGB24, layoutobj->imageSize[0], layoutobj->imageSize[1]);
+    if (ret && is_png) {
+        ret = assetsLoadPngFromMemory(me->icon, me->icon_size, tmp_gfx, mode, layoutobj->imageSize[0], layoutobj->imageSize[1]);
+        if (ret) bleedTransparentPixels(tmp_gfx, layoutobj->imageSize[0], layoutobj->imageSize[1]);
+    }
+    else if (ret) {
+        ret = assetsLoadJpgFromMemory(me->icon, me->icon_size, tmp_gfx, mode, layoutobj->imageSize[0], layoutobj->imageSize[1]);
+    }
 
-    if (ret) me->icon_gfx = downscaleImg(tmp_gfx, layoutobj->imageSize[0], layoutobj->imageSize[1], layoutobj->size[0], layoutobj->size[1], IMAGE_MODE_RGB24);
+    if (ret) me->icon_gfx = downscaleImg(tmp_gfx, layoutobj->imageSize[0], layoutobj->imageSize[1], layoutobj->size[0], layoutobj->size[1], mode);
 
     if (ret && me->icon_gfx==NULL) ret = false;
 
@@ -757,11 +817,14 @@ void menuEntryParseIcon(menuEntry_s* me) {
     free(me->icon);
     me->icon = NULL;
 
-    if (ret) me->icon_gfx_small = downscaleImg(tmp_gfx, layoutobj->imageSize[0], layoutobj->imageSize[1], layoutobj2->size[0], layoutobj2->size[1], IMAGE_MODE_RGB24);
+    if (ret) me->icon_gfx_small = downscaleImg(tmp_gfx, layoutobj->imageSize[0], layoutobj->imageSize[1], layoutobj2->size[0], layoutobj2->size[1], mode);
 
     if (!ret || me->icon_gfx_small == NULL) {
-        free(me->icon_gfx);
+        FreeImageBuffer(me->icon_gfx);
         me->icon_gfx = NULL;
+    }
+    else {
+        me->icon_mode = mode;
     }
 
     free(tmp_gfx);

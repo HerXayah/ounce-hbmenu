@@ -20,6 +20,12 @@ static FT_Face s_font_faces[FONT_FACES_MAX];
 static FT_Face s_font_lastusedface;
 static s32 s_font_faces_total = 0;
 
+#ifdef __SWITCH2__
+// The glyph cache (below) and the layout scale its glyphs were rendered at.
+static void FontClearGlyphCache(void);
+static u32 s_glyph_cache_num, s_glyph_cache_den;
+#endif
+
 static bool FontSetType(u32 font)
 {
     s32 i=0;
@@ -57,11 +63,23 @@ static bool FontSetType(u32 font)
         break;
     }
 
+    u32 char_height = scale*64;
+    #ifdef __SWITCH2__
+    // Scaled in 1/64th points, so a 1.5x size is not rounded to whole points.
+    char_height = HBMENU_SCALE_COORD(char_height);
+    // Glyphs are cached at one scale; a new one renders them again.
+    if (s_glyph_cache_num != hbmenu_scale_num || s_glyph_cache_den != hbmenu_scale_den) {
+        FontClearGlyphCache();
+        s_glyph_cache_num = hbmenu_scale_num;
+        s_glyph_cache_den = hbmenu_scale_den;
+    }
+    #endif
+
     for (i=0; i<s_font_faces_total; i++) {
         ret = FT_Set_Char_Size(
                 s_font_faces[i],        /* handle to face object           */
                 0,                      /* char_width in 1/64th of points  */
-                scale*64,               /* char_height in 1/64th of points */
+                char_height,            /* char_height in 1/64th of points */
                 300,                    /* horizontal device resolution    */
                 300);                   /* vertical device resolution      */
 
@@ -82,7 +100,11 @@ static bool FontSetType(u32 font)
     return (const ffnt_page_t*)((const uint8_t*)font + ent->offset);
 }*/
 
+#ifdef __SWITCH2__
+static inline bool FontRenderGlyph(glyph_t* glyph, u32 font, uint32_t codepoint)
+#else
 static inline bool FontLoadGlyph(glyph_t* glyph, u32 font, uint32_t codepoint)
+#endif
 {
     FT_Face face=0;
     FT_Error ret=0;
@@ -146,6 +168,97 @@ static inline bool FontLoadGlyph(glyph_t* glyph, u32 font, uint32_t codepoint)
     return true;
 }
 
+#ifdef __SWITCH2__
+/* Switch 2 keeps each glyph FreeType renders: its metrics, the face that
+ * provided it (for the line height after a newline), and its position in
+ * the GPU glyph atlas. Upstream renders every glyph again each frame. */
+#define GLYPH_CACHE_SLOTS 4096
+
+typedef struct {
+    bool used;
+    bool found;
+    u32 font;
+    uint32_t codepoint;
+    uint32_t atlasGeneration;
+    FT_Face face;
+    glyph_t glyph;
+} cachedGlyph_t;
+
+static cachedGlyph_t s_glyph_cache[GLYPH_CACHE_SLOTS];
+static u32 s_glyph_cache_used;
+
+static void FontClearGlyphCache(void)
+{
+    memset(s_glyph_cache, 0, sizeof(s_glyph_cache));
+    s_glyph_cache_used = 0;
+}
+
+static cachedGlyph_t* FontFindGlyphSlot(u32 font, uint32_t codepoint)
+{
+    // Knuth's multiplicative hash of the codepoint, offset by the font.
+    u32 slot = (codepoint * 2654435761u + font) % GLYPH_CACHE_SLOTS;
+    while (s_glyph_cache[slot].used) {
+        if (s_glyph_cache[slot].font == font && s_glyph_cache[slot].codepoint == codepoint)
+            return &s_glyph_cache[slot];
+        slot = (slot + 1) % GLYPH_CACHE_SLOTS;
+    }
+    return &s_glyph_cache[slot];
+}
+
+static inline bool FontLoadGlyph(glyph_t* glyph, u32 font, uint32_t codepoint)
+{
+    if (s_font_faces_total==0) return false;
+
+    cachedGlyph_t* entry = FontFindGlyphSlot(font, codepoint);
+    // A visible glyph is drawn from the atlas; render it again if it is not
+    // in the current atlas (the atlas filled up and was cleared).
+    bool needsAtlas = entry->found && entry->glyph.width && entry->glyph.height;
+    bool atlasCurrent = !needsAtlas || (entry->glyph.inAtlas &&
+                        entry->atlasGeneration == renderGlyphAtlasGeneration());
+    if (entry->used && atlasCurrent) {
+        s_font_lastusedface = entry->face;
+        *glyph = entry->glyph;
+        return entry->found;
+    }
+
+    if (!entry->used && s_glyph_cache_used >= GLYPH_CACHE_SLOTS * 3 / 4) {
+        FontClearGlyphCache();
+        entry = FontFindGlyphSlot(font, codepoint);
+    }
+
+    glyph_t rendered = {0};
+    bool found = FontRenderGlyph(&rendered, font, codepoint);
+    if (found && rendered.width && rendered.height) {
+        rendered.inAtlas = renderGlyphAtlasAdd(rendered.width, rendered.height,
+                                               rendered.data, rendered.pitch,
+                                               &rendered.atlasX, &rendered.atlasY);
+    }
+    rendered.data = NULL;
+
+    if (!entry->used) s_glyph_cache_used++;
+    entry->used = true;
+    entry->found = found;
+    entry->font = font;
+    entry->codepoint = codepoint;
+    entry->atlasGeneration = renderGlyphAtlasGeneration();
+    entry->face = s_font_lastusedface;
+    entry->glyph = rendered;
+    *glyph = rendered;
+    return found;
+}
+#endif
+
+#ifdef __SWITCH2__
+static void DrawGlyph(uint32_t x, uint32_t y, color_t clr, const glyph_t* glyph)
+{
+    // Upstream replaces the colour's alpha with the glyph coverage.
+    if (!glyph->inAtlas) return;
+    x += glyph->posX;
+    y -= glyph->posY;
+    renderGlyph((int32_t)x, (int32_t)y, glyph->width, glyph->height,
+                glyph->atlasX, glyph->atlasY, clr.abgr | 0xff000000u);
+}
+#else
 static void DrawGlyph(uint32_t x, uint32_t y, color_t clr, const glyph_t* glyph)
 {
     uint32_t i, j;
@@ -164,6 +277,7 @@ static void DrawGlyph(uint32_t x, uint32_t y, color_t clr, const glyph_t* glyph)
         data+= glyph->pitch;
     }
 }
+#endif
 
 static inline uint8_t DecodeByte(const char** ptr)
 {
@@ -236,6 +350,11 @@ static void DrawText_(u32 font, uint32_t x, uint32_t y, color_t clr, const char*
 {
     //__builtin_printf("DrawText %u %u %08X %s\n", (unsigned int)x, (unsigned int)y, (unsigned int)clr.abgr, text);
     //y += font->baseline;
+    #ifdef __SWITCH2__
+    x = HBMENU_SCALE_COORD(x);
+    y = HBMENU_SCALE_COORD(y);
+    max_width = HBMENU_SCALE_COORD(max_width);
+    #endif
     uint32_t origX = x;
     if (s_font_faces_total==0) return;
     if (!FontSetType(font)) return;
@@ -349,6 +468,10 @@ void GetTextDimensions(u32 font, const char* text, uint32_t* width_out, uint32_t
             width = x;
     }
 
+    #ifdef __SWITCH2__
+    width = (width * hbmenu_scale_den + hbmenu_scale_num-1) / hbmenu_scale_num;
+    height = (height * hbmenu_scale_den + hbmenu_scale_num-1) / hbmenu_scale_num;
+    #endif
     if(width_out) *width_out = width;
     if(height_out) *height_out = height;
 }
@@ -418,6 +541,10 @@ void fontExit()
         if (s_font_facesret[i]==0) FT_Done_Face(s_font_faces[i]);
 
     if (s_font_libret==0) FT_Done_FreeType(s_font_library);
+
+    #ifdef __SWITCH2__
+    FontClearGlyphCache();
+    #endif
 
     #ifdef __SWITCH__
     if (s_plinited) plExit();

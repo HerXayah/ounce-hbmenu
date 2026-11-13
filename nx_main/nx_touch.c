@@ -114,7 +114,11 @@ void handleTouch(menu_s* menu) {
             start_y+= layoutobj->posStart[1];
 
             if (x1 > start_x && x1 < end_x && y1 > start_y && y1 < end_y && touchInfo.isTap) {
-                menuCloseMsgBox();
+                // A confirmation box has its confirm choice on the left half.
+                if (menuIsConfirmMsgBoxOpen() && x1 < start_x + (int)currMsgBox.width / 2)
+                    menuConfirmMsgBox();
+                else
+                    menuCloseMsgBox();
             }
         } else if (touchInfo.isTap && !netloader_active) {
             // App Icons

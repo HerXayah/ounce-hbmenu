@@ -63,6 +63,30 @@ bool launchMenuEntryLoadABIRevision(menuEntry_s* me) {
     return true;
 }
 
+bool launchMenuEntryNeedsPlatformWarning(menuEntry_s* me) {
+#ifdef __SWITCH2__
+    // libounce's startup code, in the first page of the program, marks the
+    // platform it was built for. libnx programs and those built with an older
+    // Switch 2 devkit have no mark.
+    static u8 start[0x1000];
+
+    FILE* f = fopen(me->path, "rb");
+    if (!f) return false;
+    size_t size = fread(start, 1, sizeof(start), f);
+    fclose(f);
+
+    if (size < sizeof(NroStart) + sizeof(NroHeader)) return false;
+    const NroHeader* header = (const NroHeader*)(start + sizeof(NroStart));
+    if (header->magic != NROHEADER_MAGIC) return false; // Not an NRO: leave it to the loader.
+
+    NroOunceInfo info;
+    return !nroGetOunceInfo(start, size, &info) || info.platform != NroPlatform_Switch2;
+#else
+    (void)me;
+    return false;
+#endif
+}
+
 void launchMenuEntry(menuEntry_s* me) {
     /*bool canUseTitles = loaderCanUseTitles();
     if (me->descriptor.numTargetTitles && canUseTitles)

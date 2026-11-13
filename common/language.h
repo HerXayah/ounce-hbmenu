@@ -54,6 +54,10 @@ typedef enum
 
     StrId_RecompileWarning,
 
+    StrId_Switch1Warning,
+    StrId_MsgBox_LaunchAnyway,
+    StrId_MsgBox_Cancel,
+
     StrId_Max,
 } StrId;
 

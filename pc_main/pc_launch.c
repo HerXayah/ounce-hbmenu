@@ -19,6 +19,10 @@ bool launchMenuEntryLoadABIRevision(menuEntry_s* me) {
     return true;
 }
 
+bool launchMenuEntryNeedsPlatformWarning(menuEntry_s* me) {
+    return false;
+}
+
 void launchMenuEntry(menuEntry_s* me) {
 
 }

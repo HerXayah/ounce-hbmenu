@@ -27,6 +27,12 @@ typedef enum
     ENTRY_TYPE_FILE_OTHER,
 } MenuEntryType;
 
+typedef enum
+{
+    IMAGE_MODE_RGB24,
+    IMAGE_MODE_RGBA32
+} ImageMode;
+
 typedef struct menuEntry_s_tag menuEntry_s;
 typedef struct menu_s_tag menu_s;
 
@@ -70,17 +76,12 @@ struct menuEntry_s_tag
     size_t icon_size;
     uint8_t *icon_gfx;
     uint8_t *icon_gfx_small;
+    ImageMode icon_mode; // pixel format of icon_gfx and icon_gfx_small
 
     bool starred;
 
     NacpStruct *nacp;
 };
-
-typedef enum
-{
-    IMAGE_MODE_RGB24,
-    IMAGE_MODE_RGBA32
-} ImageMode;
 
 extern double menuTimer;
 

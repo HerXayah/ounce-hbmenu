@@ -140,9 +140,48 @@ static inline color_t MakeColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a)
     return clr;
 }
 
+#ifdef __SWITCH2__
+#include "../switch2/render.h"
+#endif
+
+/* Frees an image buffer that may have been drawn. Switch 2 caches drawn
+ * images as GPU textures keyed by their buffer address. */
+static inline void FreeImageBuffer(void *buffer)
+{
+    #ifdef __SWITCH2__
+    renderForgetImage(buffer);
+    #endif
+    free(buffer);
+}
+
 #ifdef __SWITCH__
 extern uint8_t* g_framebuf;
 extern u32 g_framebuf_width;
+#ifdef __SWITCH2__
+/* Switch 2 draws on the GPU (switch2/render.h): pixels extend runs of equal
+ * colour that become rectangles of 1.5x1.5 physical pixels. The bounds are
+ * upstream's. FetchPixelColor has no equivalent; drawWave blends on the GPU. */
+#include "../switch2/render_scale.h"
+static inline void DrawPixel(uint32_t x, uint32_t y, color_t clr)
+{
+    if (x >= HBMENU_LOGICAL_WIDTH || y >= HBMENU_LOGICAL_HEIGHT)
+        return;
+    renderPixels(x, y, 1, clr.abgr);
+}
+static inline void DrawPixelRaw(uint32_t x, uint32_t y, color_t clr)
+{
+    if (x >= HBMENU_LOGICAL_WIDTH || y >= HBMENU_LOGICAL_HEIGHT)
+        return;
+    renderPixels(x, y, 1, clr.abgr | 0xff000000u);
+}
+static inline void Draw4PixelsRaw(uint32_t x, uint32_t y, color_t clr)
+{
+    if (x >= HBMENU_LOGICAL_WIDTH || y >= HBMENU_LOGICAL_HEIGHT ||
+        x > HBMENU_LOGICAL_WIDTH-4)
+        return;
+    renderPixels(x, y, 4, clr.abgr | 0xff000000u);
+}
+#else
 static inline void DrawPixel(uint32_t x, uint32_t y, color_t clr)
 {
     if (x >= 1280 || y >= 720)
@@ -179,6 +218,7 @@ static inline color_t FetchPixelColor(uint32_t x, uint32_t y)
     u8 b = (u8)(val>>16);
     return MakeColor(r, g, b, 255);
 }
+#endif
 #else
 extern color_t pixels[720][1280];
 static inline void DrawPixel(uint32_t x, uint32_t y, color_t clr)

@@ -2,6 +2,9 @@
 
 #include <physfs.h>
 #include <png.h>
+#ifdef __SWITCH2__
+#include "../switch2/vector_assets.h"
+#endif
 
 #define GENASSET(_p, _mode, _w, _h) {{.path = _p, .imageMode = _mode, .imageSize = {_w, _h}}, {}}
 
@@ -26,7 +29,7 @@ assetsDataEntry g_assetsDataList[AssetId_Max][2] = {
 };
 
 static void assetsClearEntry(assetsDataEntry *entry) {
-    free(entry->buffer);
+    FreeImageBuffer(entry->buffer);
 
     entry->size = 0;
     entry->buffer = NULL;
@@ -234,6 +237,15 @@ bool assetsLoadData(AssetId id, const char *path, int *imageSize) {
         if (entry->buffer) memset(entry->buffer, 0, entry->size);
         else ret = false;
     }
+
+    #ifdef __SWITCH2__
+    // Switch 2 ships the built-in icons as SVG (switch2/vector_assets.c).
+    if (ret && !path && vectorAssetLoad(entry->path, entry->buffer, entry->imageMode,
+                                        entry->imageSize[0], entry->imageSize[1])) {
+        entry->initialized = true;
+        return true;
+    }
+    #endif
 
     if (ret) ret = assetsPhysfsReadFile(entry->path, &data_buf, &filesize, false);
 

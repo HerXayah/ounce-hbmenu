@@ -23,3 +23,6 @@ size_t launchAddArg(argData_s* ad, const char* arg);
 void launchAddArgsFromString(argData_s* ad, char* arg);
 bool launchMenuEntryLoadABIRevision(menuEntry_s* me);
 void launchMenuEntry(menuEntry_s* me);
+// True for an NRO that is not marked as built with the Switch 2 devkit, which
+// hbmenu asks about before launching.
+bool launchMenuEntryNeedsPlatformWarning(menuEntry_s* me);

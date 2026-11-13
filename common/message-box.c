@@ -143,7 +143,16 @@ void menuDrawMsgBox() {
     layoutobj = &themeCurrent.layoutObjects[ThemeLayoutId_MsgBoxBottomText];
     y = start_y + currMsgBox.height + layoutobj->posStart[1];
 
-    if (!msgboxNetloaderEnabled) {
+    if (!msgboxNetloaderEnabled && currMsgBox.confirm) {
+        char choice[128];
+        snprintf(choice, sizeof(choice), "%s %s", themeCurrent.buttonAText, textGetString(StrId_MsgBox_LaunchAnyway));
+        x = GetTextXCoordinate(interuimedium20, start_x + (currMsgBox.width / 4), choice, 'c');
+        DrawText(interuimedium20, x, y, themeCurrent.textColor, choice);
+        snprintf(choice, sizeof(choice), "%s %s", themeCurrent.buttonBText, textGetString(StrId_MsgBox_Cancel));
+        x = GetTextXCoordinate(interuimedium20, start_x + (currMsgBox.width * 3 / 4), choice, 'c');
+        DrawText(interuimedium20, x, y, themeCurrent.textColor, choice);
+    }
+    else if (!msgboxNetloaderEnabled) {
         x = GetTextXCoordinate(interuimedium20, start_x + (currMsgBox.width / 2), textGetString(StrId_MsgBox_OK), 'c');
         DrawText(interuimedium20, x, y, themeCurrent.textColor, textGetString(StrId_MsgBox_OK));
     }
@@ -177,13 +186,36 @@ void menuCreateMsgBox(int width, int height, const char *text) {
     if (new_text==NULL)
         return;
 
-    currMsgBox = (MessageBox) { width, height, NULL, new_text };
+    currMsgBox = (MessageBox) { width, height, NULL, new_text, NULL, NULL };
 
     currMsgBox.bg = malloc(currMsgBox.width*currMsgBox.height*4);
 
     if (currMsgBox.bg) {
         drawMsgBoxBgToBuff(currMsgBox.bg, currMsgBox.width, currMsgBox.height);
     }
+}
+
+void menuCreateConfirmMsgBox(int width, int height, const char *text, void (*confirm)(void *arg), void *arg) {
+    menuCloseMsgBox();
+    menuCreateMsgBox(width, height, text);
+    if (!menuIsMsgBoxOpen())
+        return;
+
+    currMsgBox.confirm = confirm;
+    currMsgBox.confirmArg = arg;
+}
+
+bool menuIsConfirmMsgBoxOpen(void) {
+    return menuIsMsgBoxOpen() && currMsgBox.confirm != NULL;
+}
+
+void menuConfirmMsgBox(void) {
+    void (*confirm)(void *arg) = currMsgBox.confirm;
+    void *arg = currMsgBox.confirmArg;
+
+    menuCloseMsgBox();
+    if (confirm)
+        confirm(arg);
 }
 
 bool menuIsMsgBoxOpen() {
@@ -197,6 +229,8 @@ void menuCloseMsgBox() {
     }
 
     currMsgBox.width = currMsgBox.height = 0;
+    currMsgBox.confirm = NULL;
+    currMsgBox.confirmArg = NULL;
 
     if (currMsgBox.text) {
         free(currMsgBox.text);

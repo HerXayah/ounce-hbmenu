@@ -8,8 +8,15 @@
 #include "nx_touch.h"
 
 // Define the desired framebuffer resolution (here we set it to 720p).
+#ifdef __SWITCH2__
+// Switch 2 draws at the window's size, which follows the console's default
+// resolution (switch2/ouncevk_platform.c); graphicsInit does not use these.
+#define FB_WIDTH  1920
+#define FB_HEIGHT 1080
+#else
 #define FB_WIDTH  1280
 #define FB_HEIGHT 720
+#endif
 
 uint8_t* g_framebuf;
 u32 g_framebuf_width;
@@ -158,7 +165,9 @@ int main(int argc, char **argv)
             #ifdef PERF_LOG
             start_tick = armGetSystemTick();
             #endif
+            #ifndef __SWITCH2__ // Switch 2 clears in the GPU render pass
             memset(g_framebuf, 237, g_framebuf_width * FB_HEIGHT);
+            #endif
             menuLoop();
         }
         else {
@@ -219,6 +228,18 @@ bool menuUpdate(void) {
     int entries_count = layoutobj->posEnd[0];
 
     handleTouch(menu);
+
+    // A confirmation box takes only its two choices, and Plus to exit.
+    if (menuIsConfirmMsgBoxOpen())
+    {
+        if (down & HidNpadButton_A)
+            menuHandleAButton();
+        else if (down & HidNpadButton_B)
+            launchMenuBackTask();
+        else if (down & HidNpadButton_Plus)
+            exitflag = 1;
+        return exitflag;
+    }
 
     if (down & HidNpadButton_Y)
     {

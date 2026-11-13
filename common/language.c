@@ -986,4 +986,23 @@ const char* const g_strings[StrId_Max][17] =
             "Expect compatibility issues.\n"
         ),
     },
+
+    [StrId_Switch1Warning] =
+    {
+        STR_EN(
+            "This application was built for the Switch 1, or with an\n"
+            "older Switch 2 devkit. It may crash your system.\n"
+            "Rebuild it with the current Switch 2 devkit."
+        ),
+    },
+
+    [StrId_MsgBox_LaunchAnyway] =
+    {
+        STR_EN("Launch anyway"),
+    },
+
+    [StrId_MsgBox_Cancel] =
+    {
+        STR_EN("Cancel"),
+    },
 };
