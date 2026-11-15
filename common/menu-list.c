@@ -1,4 +1,5 @@
 #include "common.h"
+#include <ctype.h>
 
 static menu_s s_menu[2];
 static menu_s s_menuFileassoc[2];
@@ -143,6 +144,62 @@ void menuReorder (void) {
     menuClear();
 }
 
+static char* trim_text(char* text) {
+    while (*text && isspace((unsigned char)*text))
+        text++;
+    char* end = text + strlen(text);
+    while (end > text && isspace((unsigned char)end[-1]))
+        end--;
+    *end = '\0';
+    return text;
+}
+
+static bool menuHasPath(const char* path) {
+    for (menuEntry_s* entry = s_menu[!s_curMenu].firstEntry; entry; entry = entry->next) {
+        if (strcmp(entry->path, path) == 0)
+            return true;
+    }
+    return false;
+}
+
+static void menuLoadShortcuts(void) {
+    char path[PATH_MAX + 32];
+    snprintf(path, sizeof(path), "%s/shortcuts.txt", menuGetRootPath());
+    FILE* file = fopen(path, "r");
+    if (!file)
+        return;
+
+    char line[1024];
+    while (fgets(line, sizeof(line), file)) {
+        char* text = trim_text(line);
+        if (!text[0] || text[0] == '#')
+            continue;
+        char* separator = strchr(text, '=');
+        if (!separator)
+            separator = strchr(text, '|');
+        if (!separator)
+            continue;
+        *separator = '\0';
+        char* name = trim_text(text);
+        char* target = trim_text(separator + 1);
+        if (!name[0] || strncmp(target, "sdmc:/", 6) != 0)
+            continue;
+        if (strlen(target) >= sizeof(((menuEntry_s*)0)->path) || menuHasPath(target))
+            continue;
+
+        menuEntry_s* entry = menuCreateEntry(ENTRY_TYPE_FILE);
+        if (!entry)
+            continue;
+        snprintf(entry->path, sizeof(entry->path), "%s", target);
+        if (!menuEntryLoad(entry, name, false, true)) {
+            menuDeleteEntry(entry, 0);
+            continue;
+        }
+        menuAddEntry(entry);
+    }
+    fclose(file);
+}
+
 int menuScan(const char* target) {
     int pos;
     char dirsep[8];
@@ -216,6 +273,8 @@ int menuScan(const char* target) {
     }
 
     closedir(dir);
+    if (strcmp(s_menu[!s_curMenu].dirname, menuGetRootPath()) == 0)
+        menuLoadShortcuts();
     menuSort();
 
     // Swap the menu and clear the previous menu
