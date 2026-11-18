@@ -24,8 +24,8 @@ endif
 TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/libounce/switch2_rules
 
-APP_VERSION	:=	1337.69420.l33t
-APP_TITLE	:=	test
+APP_VERSION	:=	3.6.1
+APP_TITLE	:=	nx-hbmenu
 APP_AUTHOR	:=	switchbrew
 
 TARGET		:=	hbmenu
