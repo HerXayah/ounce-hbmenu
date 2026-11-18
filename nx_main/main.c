@@ -24,6 +24,9 @@ u32 g_framebuf_width;
 PadState g_pad;
 PadRepeater g_pad_repeater;
 
+// The user pressed Plus to leave, rather than launching a program.
+static bool g_userExit;
+
 bool menuUpdateErrorScreen(void);
 
 #ifdef PERF_LOG
@@ -186,9 +189,10 @@ int main(int argc, char **argv)
         }
     }
 
-    // Only the error screen leaves through the applet; Plus is intentionally
-    // ignored in the menu. A real launch returns to the loader instead.
-    if (error_screen)
+    // Leaving by choice (Plus) or from the error screen ends the process
+    // through the applet. After a launch it must return to the loader, which
+    // starts the chosen program.
+    if (error_screen || g_userExit)
         __nx_applet_exit_mode = 1;
 
     if (!error_screen) {
@@ -233,13 +237,15 @@ bool menuUpdate(void) {
 
     handleTouch(menu);
 
-    // A confirmation box takes only its two choices.
+    // A confirmation box takes only its two choices, and Plus to exit.
     if (menuIsConfirmMsgBoxOpen())
     {
         if (down & HidNpadButton_A)
             menuHandleAButton();
         else if (down & HidNpadButton_B)
             launchMenuBackTask();
+        else if (down & HidNpadButton_Plus)
+            exitflag = g_userExit = 1;
         return exitflag;
     }
 
@@ -261,6 +267,10 @@ bool menuUpdate(void) {
     }
     else if(down & HidNpadButton_Minus){
         themeMenuStartup();
+    }
+    else if (down & HidNpadButton_Plus)
+    {
+        exitflag = g_userExit = 1;
     }
     else if (menu->nEntries > 0)
     {
