@@ -7,7 +7,7 @@ Place `shortcuts.txt` in `/switch/` (next to hbmenu's app folders). Each line
 adds a shortcut at the hbmenu root:
 
 ```text
-RetroArch=sdmc:/switch/brewstore/apps/retroarch/retroarch_switch.nro
+RetroArch=sdmc:/switch/retroarch/retroarch_switch.nro
 xStarbound=sdmc:/switch/brewstore/apps/xstarbound/xStarbound.nro
 ```
 

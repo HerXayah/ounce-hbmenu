@@ -186,12 +186,16 @@ int main(int argc, char **argv)
         }
     }
 
+    // Only the error screen leaves through the applet; Plus is intentionally
+    // ignored in the menu. A real launch returns to the loader instead.
+    if (error_screen)
+        __nx_applet_exit_mode = 1;
+
     if (!error_screen) {
         graphicsExit();
     }
     else {
         consoleExit(NULL);
-        __nx_applet_exit_mode = 1;
     }
 
     #ifdef ENABLE_AUDIO
@@ -229,15 +233,13 @@ bool menuUpdate(void) {
 
     handleTouch(menu);
 
-    // A confirmation box takes only its two choices, and Plus to exit.
+    // A confirmation box takes only its two choices.
     if (menuIsConfirmMsgBoxOpen())
     {
         if (down & HidNpadButton_A)
             menuHandleAButton();
         else if (down & HidNpadButton_B)
             launchMenuBackTask();
-        else if (down & HidNpadButton_Plus)
-            exitflag = 1;
         return exitflag;
     }
 
@@ -259,10 +261,6 @@ bool menuUpdate(void) {
     }
     else if(down & HidNpadButton_Minus){
         themeMenuStartup();
-    }
-    else if (down & HidNpadButton_Plus)
-    {
-        exitflag = 1;
     }
     else if (menu->nEntries > 0)
     {
