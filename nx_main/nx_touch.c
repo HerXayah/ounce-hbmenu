@@ -262,6 +262,27 @@ void handleMouse(menu_s* menu) {
     if (s_mouseY < 0) s_mouseY = 0;
     if (s_mouseY > 719) s_mouseY = 719;
 
+    /* Edge auto-scroll: while the cursor is visible and parked at a screen
+     * edge, walk the selection so the list scrolls in that direction. */
+    if (s_mouseVisible && !menuIsSettingsMenu() &&
+        !menuIsMsgBoxOpen() && !menuIsConfirmMsgBoxOpen() && menu->nEntries > 0) {
+        static u64 edgeNextTick;
+        int edge = 0;
+        if (s_mouseX < 32)
+            edge = -1;
+        else if (s_mouseX > 1279 - 32)
+            edge = 1;
+        const u64 now = armGetSystemTick();
+        if (edge && now >= edgeNextTick) {
+            menu->curEntry += edge;
+            if (menu->curEntry < 0) menu->curEntry = 0;
+            if (menu->curEntry >= menu->nEntries) menu->curEntry = menu->nEntries - 1;
+            edgeNextTick = now + armNsToTicks(150000000ULL);
+        }
+        if (!edge)
+            edgeNextTick = 0;
+    }
+
     ThemeLayoutObject* list = &themeCurrent.layoutObjects[ThemeLayoutId_MenuList];
     const bool over_list = s_mouseY > list->posStart[1] &&
                            s_mouseY < list->posStart[1] + list->size[1];
