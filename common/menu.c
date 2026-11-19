@@ -80,7 +80,10 @@ static enum
     HBMENU_NETLOADER_ERROR,
     HBMENU_NETLOADER_SUCCESS,
     HBMENU_THEME_MENU,
+    HBMENU_SETTINGS_MENU,
 } hbmenu_state = HBMENU_DEFAULT;
+
+static char settingsReturnPath[PATH_MAX + 1];
 
 void launchMenuNetloaderTask() {
     if(hbmenu_state == HBMENU_DEFAULT)
@@ -95,6 +98,10 @@ void launchMenuBackTask() {
 
     if(hbmenu_state == HBMENU_NETLOADER_ACTIVE) {
         netloaderSignalExit();
+    }
+    else if(hbmenu_state == HBMENU_SETTINGS_MENU) {
+        hbmenu_state = HBMENU_DEFAULT;
+        menuScan(settingsReturnPath[0] ? settingsReturnPath : rootPath);
     }
     else if(hbmenu_state == HBMENU_THEME_MENU) {
         hbmenu_state = HBMENU_DEFAULT;
@@ -115,13 +122,34 @@ void menuHandleAButton(void) {
     else if (hbmenu_state != HBMENU_NETLOADER_ACTIVE && menuIsMsgBoxOpen()) {
         menuCloseMsgBox();
     }
-    else if (menu->nEntries > 0 && (hbmenu_state == HBMENU_DEFAULT || hbmenu_state == HBMENU_THEME_MENU))
+    else if (menu->nEntries > 0 &&
+             (hbmenu_state == HBMENU_DEFAULT || hbmenu_state == HBMENU_THEME_MENU))
     {
         int i;
-        menuEntry_s* me;
-        for (i = 0, me = menu->firstEntry; i != menu->curEntry; i ++, me = me->next);
+        menuEntry_s* me = menu->firstEntry;
+        for (i = 0; i < menu->curEntry && me; i ++, me = me->next);
+        if (!me)
+            return;
+        /* A stale selection from the previous screen must not open anything:
+         * a real folder entry is exactly one path component below dirname. */
+        if (me->type == ENTRY_TYPE_FOLDER) {
+            const char* d = menu->dirname;
+            const size_t dlen = strlen(d);
+            const char* rest;
+            if (strncmp(me->path, d, dlen) != 0)
+                return;
+            rest = me->path + dlen;
+            if (*rest == '/')
+                rest++;
+            if (*rest == '\0' || strchr(rest, '/') != NULL)
+                return;
+        }
         launchMenuEntryTask(me);
         //workerSchedule(launchMenuEntryTask, me);
+    }
+    else if (menu->nEntries > 0 && hbmenu_state == HBMENU_SETTINGS_MENU)
+    {
+        settingsMenuToggleCurrent();
     }
 }
 
@@ -210,6 +238,10 @@ void launchApplyThemeTask(menuEntry_s* arg) {
 
 bool menuIsNetloaderActive(void) {
     return hbmenu_state == HBMENU_NETLOADER_ACTIVE;
+}
+
+bool menuIsSettingsMenu(void) {
+    return hbmenu_state == HBMENU_SETTINGS_MENU;
 }
 
 #ifdef __SWITCH2__
@@ -530,6 +562,7 @@ void menuLoadFileassoc(void) {
 
 void menuStartup(void) {
     menuLoadFileassoc();
+    menuHiddenLoad();
 
     menuScan(rootPath);
 
@@ -545,6 +578,14 @@ void themeMenuStartup(void) {
 
     themeMenuScan(tmp_path);
     menuThemeSelectCurrentEntry();
+}
+
+void settingsMenuStartup(void) {
+    if(hbmenu_state != HBMENU_DEFAULT) return;
+    menu_s* menu = menuGetCurrent();
+    snprintf(settingsReturnPath, sizeof(settingsReturnPath), "%s", menu->dirname);
+    hbmenu_state = HBMENU_SETTINGS_MENU;
+    settingsMenuScan(rootPath);
 }
 
 color_t waveBlendAdd(color_t a, color_t b, float alpha) {
@@ -696,6 +737,7 @@ void drawCharge() {
         if (isCharging && layoutobj->visible)
             drawIcon(layoutobj->posStart[0], layoutobj->posStart[1], data->imageSize[0], data->imageSize[1], data->buffer, themeCurrent.textColor);
     }
+
 }
 
 void drawNetwork(int tmpX, AssetId id) {
@@ -867,18 +909,24 @@ void menuLoop(void) {
         DrawText(layoutobj->font, layoutobj->posType ? x_pos + layoutobj->posStart[0] : layoutobj->posStart[0], layoutobj->posStart[1], themeCurrent.attentionTextColor, appletMode);
     }
     const char* loaderInfo = envGetLoaderInfo();
+    char loaderDisplay[128];
+    const char* shownLoader = loaderInfo;
+    if (loaderInfo && strncmp(loaderInfo, "ounce-hbloader", 14) == 0) {
+        snprintf(loaderDisplay, sizeof(loaderDisplay), "clownce-hbloader%s", loaderInfo + 14);
+        shownLoader = loaderDisplay;
+    }
     layoutobj = &themeCurrent.layoutObjects[ThemeLayoutId_LoaderInfo];
-    if (loaderInfo && layoutobj->visible) {
+    if (shownLoader && layoutobj->visible) {
         u32 x_pos = layoutobj->posStart[0];
-        char* spacePos = strchr(loaderInfo, ' ');
+        char* spacePos = strchr(shownLoader, ' ');
         if (spacePos) {
             char tempbuf[64] = {0};
-            size_t tempsize = spacePos - loaderInfo + 1;
+            size_t tempsize = spacePos - shownLoader + 1;
             if (tempsize > sizeof(tempbuf)-1) tempsize = sizeof(tempbuf)-1;
-            memcpy(tempbuf, loaderInfo, tempsize);
+            memcpy(tempbuf, shownLoader, tempsize);
             x_pos = GetTextXCoordinate(layoutobj->font, layoutobj->posEnd[0], tempbuf, 'r');
         }
-        DrawText(layoutobj->font, x_pos, layoutobj->posStart[1], themeCurrent.textColor, loaderInfo);
+        DrawText(layoutobj->font, x_pos, layoutobj->posStart[1], themeCurrent.textColor, shownLoader);
     }
     #endif
 
@@ -1044,4 +1092,8 @@ void menuLoop(void) {
     if (layoutobj->visible) DrawTextTruncate(layoutobj->font, layoutobj->posStart[0], layoutobj->posStart[1], themeCurrent.textColor, menu->dirname, layoutobj->size[0], "...");
 
     menuDrawMsgBox();
+#ifdef __SWITCH2__
+    extern void drawMouseCursor(void);
+    drawMouseCursor();
+#endif
 }

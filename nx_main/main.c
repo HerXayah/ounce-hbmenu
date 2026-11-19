@@ -156,7 +156,7 @@ int main(int argc, char **argv)
         // Scan the gamepad. This should be done once for each frame
         padUpdate(&g_pad);
         padRepeaterUpdate(&g_pad_repeater, padGetButtons(&g_pad) & (
-            HidNpadButton_AnyLeft | HidNpadButton_AnyUp | HidNpadButton_AnyRight | HidNpadButton_AnyDown | HidNpadButton_ZL | HidNpadButton_ZR
+            HidNpadButton_AnyLeft | HidNpadButton_AnyUp | HidNpadButton_AnyRight | HidNpadButton_AnyDown
         ));
 
         if (!error_screen) {
@@ -202,6 +202,7 @@ int main(int argc, char **argv)
     audio_exit();
     #endif
 
+    mouseExit();
     fontExit();
     launchExit();
     netloaderSignalExit();
@@ -227,11 +228,21 @@ u64 menuGetKeysDown(void) {
 bool menuUpdate(void) {
     bool exitflag = 0;
     menu_s* menu = menuGetCurrent();
+    const bool mouse_mode = mouseIsActive();
     u64 down = menuGetKeysDown();
+    if (down)
+        mouseControllerInput();
+    /* Official Switch 2 bindings: R and ZR both execute; B is Back. */
+    if (down & HidNpadButton_R)
+        down = (down & ~HidNpadButton_R) | HidNpadButton_A;
+    if (down & HidNpadButton_ZR)
+        down = (down & ~HidNpadButton_ZR) | HidNpadButton_A;
+
     ThemeLayoutObject *layoutobj = &themeCurrent.layoutObjects[ThemeLayoutId_MenuListTiles];
     int entries_count = layoutobj->posEnd[0];
 
     handleTouch(menu);
+    handleMouse(menu);
 
     // A confirmation box takes only its two choices.
     if (menuIsConfirmMsgBoxOpen())
@@ -243,11 +254,23 @@ bool menuUpdate(void) {
         return exitflag;
     }
 
-    if (down & HidNpadButton_Y)
+    if (menuIsSettingsMenu())
+    {
+        if (down & HidNpadButton_A) {
+            settingsMenuToggleCurrent();
+            return exitflag;
+        }
+        if (down & (HidNpadButton_B | HidNpadButton_Plus)) {
+            launchMenuBackTask();
+            return exitflag;
+        }
+    }
+
+    if (!menuIsSettingsMenu() && (down & HidNpadButton_Y))
     {
         launchMenuNetloaderTask();
     }
-    else if (down & HidNpadButton_X)
+    else if (!menuIsSettingsMenu() && (down & HidNpadButton_X))
     {
         menuHandleXButton();
     }
@@ -259,17 +282,56 @@ bool menuUpdate(void) {
     {
         launchMenuBackTask();
     }
-    else if(down & HidNpadButton_Minus){
+    else if(!menuIsSettingsMenu() && (down & HidNpadButton_Minus)){
         themeMenuStartup();
     }
-    else if (menu->nEntries > 0)
+    else if(down & HidNpadButton_Plus){
+        if (menuIsSettingsMenu())
+            launchMenuBackTask();
+        else
+            settingsMenuStartup();
+    }
+    else if (menu->nEntries > 0 && !mouse_mode)
     {
         int move = 0;
 
-        if (down & HidNpadButton_AnyLeft) move--;
-        if (down & HidNpadButton_AnyRight) move++;
-        if (down & (HidNpadButton_AnyDown | HidNpadButton_ZL)) move-=entries_count;
-        if (down & (HidNpadButton_AnyUp | HidNpadButton_ZR)) move+=entries_count;
+        /* D-pad only; both analog sticks use the same latched horizontal scroll. */
+        if (down & HidNpadButton_Left) move--;
+        if (down & HidNpadButton_Right) move++;
+        if (down & (HidNpadButton_Down | HidNpadButton_ZL)) move-=entries_count;
+        if (down & (HidNpadButton_Up | HidNpadButton_ZR)) move+=entries_count;
+
+        static int leftStickDirection;
+        static int rightStickDirection;
+        static u64 leftStickNextTick;
+        static u64 rightStickNextTick;
+        const u64 now_tick = svcGetSystemTick();
+
+        const HidAnalogStickState left_stick = padGetStickPos(&g_pad, 0);
+        const int left_direction = left_stick.x > 10000 ? 1 : left_stick.x < -10000 ? -1 : 0;
+        if (left_direction != leftStickDirection) {
+            leftStickDirection = left_direction;
+            if (left_direction) {
+                move += left_direction;
+                leftStickNextTick = now_tick + armNsToTicks(180000000ULL);
+            }
+        } else if (left_direction && now_tick >= leftStickNextTick) {
+            move += left_direction;
+            leftStickNextTick = now_tick + armNsToTicks(180000000ULL);
+        }
+
+        const HidAnalogStickState right_stick = padGetStickPos(&g_pad, 1);
+        const int right_direction = right_stick.x > 10000 ? 1 : right_stick.x < -10000 ? -1 : 0;
+        if (right_direction != rightStickDirection) {
+            rightStickDirection = right_direction;
+            if (right_direction) {
+                move += right_direction;
+                rightStickNextTick = now_tick + armNsToTicks(180000000ULL);
+            }
+        } else if (right_direction && now_tick >= rightStickNextTick) {
+            move += right_direction;
+            rightStickNextTick = now_tick + armNsToTicks(180000000ULL);
+        }
 
         int newEntry = menu->curEntry + move;
         if (newEntry < 0) newEntry = 0;

@@ -154,6 +154,71 @@ static char* trim_text(char* text) {
     return text;
 }
 
+static bool s_hideFolders;
+
+static void hiddenFoldersPath(char* out, size_t out_size) {
+    snprintf(out, out_size, "%s/config/nx-hbmenu/hidden_folders.txt",
+             menuGetRootBasePath());
+}
+
+static bool menuFolderHidden(const char* name) {
+    (void)name;
+    return s_hideFolders;
+}
+
+static void hiddenFoldersSave(void) {
+    char path[PATH_MAX + 32];
+    hiddenFoldersPath(path, sizeof(path));
+    FILE* file = fopen(path, "w");
+    if (!file)
+        return;
+    fprintf(file, "%d\n", s_hideFolders ? 1 : 0);
+    fclose(file);
+}
+
+void menuHiddenLoad(void) {
+    s_hideFolders = false;
+    char path[PATH_MAX + 32];
+    hiddenFoldersPath(path, sizeof(path));
+    FILE* file = fopen(path, "r");
+    if (!file)
+        return;
+    int value = 0;
+    if (fscanf(file, "%d", &value) == 1)
+        s_hideFolders = value != 0;
+    fclose(file);
+}
+
+void settingsMenuScan(const char* target) {
+    menuClear();
+    menu_s* menu = &s_menu[!s_curMenu];
+    if (getcwd(menu->dirname, PATH_MAX + 1) == NULL) {
+        snprintf(menu->dirname, sizeof(menu->dirname), "%s", target);
+    }
+    menuEntry_s* me = menuCreateEntry(ENTRY_TYPE_FOLDER);
+    if (!me)
+        return;
+    snprintf(me->path, sizeof(me->path), "settings/hide-folders");
+    snprintf(me->name, sizeof(me->name), "Hide folders: %s",
+             s_hideFolders ? "On" : "Off");
+    menuAddEntry(me);
+    menuSort();
+    s_curMenu = !s_curMenu;
+    menuClear();
+}
+
+void settingsMenuToggleCurrent(void) {
+    menu_s* menu = menuGetCurrent();
+    if (!menu || menu->curEntry < 0 || menu->curEntry >= menu->nEntries)
+        return;
+    s_hideFolders = !s_hideFolders;
+    hiddenFoldersSave();
+    settingsMenuScan(menuGetRootPath());
+    menu = menuGetCurrent();
+    if (menu->nEntries > 0)
+        menu->curEntry = 0;
+}
+
 static bool menuHasPath(const char* path) {
     for (menuEntry_s* entry = s_menu[!s_curMenu].firstEntry; entry; entry = entry->next) {
         if (strcmp(entry->path, path) == 0)
@@ -204,6 +269,8 @@ int menuScan(const char* target) {
     int pos;
     char dirsep[8];
 
+    const int previousEntry = s_menu[s_curMenu].curEntry;
+    menuClear();
     if (chdir(target) < 0) return 1;
     if (getcwd(s_menu[!s_curMenu].dirname, PATH_MAX+1) == NULL)
         return 1;
@@ -248,6 +315,10 @@ int menuScan(const char* target) {
         entrytype = (tmpstat.st_mode & S_IFMT) != S_IFREG;
         #endif
 
+        if (entrytype && strcmp(s_menu[!s_curMenu].dirname, menuGetRootPath()) == 0 &&
+            menuFolderHidden(dp->d_name))
+            continue;
+
         if (entrytype)
             me = menuCreateEntry(ENTRY_TYPE_FOLDER);
         else
@@ -276,6 +347,14 @@ int menuScan(const char* target) {
     if (strcmp(s_menu[!s_curMenu].dirname, menuGetRootPath()) == 0)
         menuLoadShortcuts();
     menuSort();
+
+    if (s_menu[!s_curMenu].nEntries > 0) {
+        s_menu[!s_curMenu].curEntry = previousEntry;
+        if (s_menu[!s_curMenu].curEntry >= s_menu[!s_curMenu].nEntries)
+            s_menu[!s_curMenu].curEntry = s_menu[!s_curMenu].nEntries - 1;
+        if (s_menu[!s_curMenu].curEntry < 0)
+            s_menu[!s_curMenu].curEntry = 0;
+    }
 
     // Swap the menu and clear the previous menu
     s_curMenu = !s_curMenu;
