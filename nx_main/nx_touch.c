@@ -264,6 +264,7 @@ void handleMouse(menu_s* menu) {
 
     /* Edge auto-scroll: while the cursor is visible and parked at a screen
      * edge, walk the selection so the list scrolls in that direction. */
+    bool atScrollEdge = false;
     if (s_mouseVisible && !menuIsSettingsMenu() &&
         !menuIsMsgBoxOpen() && !menuIsConfirmMsgBoxOpen() && menu->nEntries > 0) {
         static u64 edgeNextTick;
@@ -272,12 +273,11 @@ void handleMouse(menu_s* menu) {
             edge = -1;
         else if (s_mouseX > 1279 - 32)
             edge = 1;
+        atScrollEdge = edge != 0;
         const u64 now = armGetSystemTick();
         if (edge && now >= edgeNextTick) {
-            menu->curEntry += edge;
-            if (menu->curEntry < 0) menu->curEntry = 0;
-            if (menu->curEntry >= menu->nEntries) menu->curEntry = menu->nEntries - 1;
-            edgeNextTick = now + armNsToTicks(150000000ULL);
+            menuScrollPage(menu, edge);
+            edgeNextTick = now + armNsToTicks(300000000ULL);
         }
         if (!edge)
             edgeNextTick = 0;
@@ -293,13 +293,19 @@ void handleMouse(menu_s* menu) {
                    checkInsideTextLayoutObject(ThemeLayoutId_ButtonBText, s_mouseX, s_mouseY) ||
                    checkInsideTextLayoutObject(ThemeLayoutId_ButtonX, s_mouseX, s_mouseY) ||
                    checkInsideTextLayoutObject(ThemeLayoutId_ButtonXText, s_mouseX, s_mouseY);
-    if (over_list && pointerMoved && !menuIsSettingsMenu() && menu->nEntries > 0) {
+    const HidAnalogStickState stick_l = padGetStickPos(&g_pad, 0);
+    const HidAnalogStickState stick_r = padGetStickPos(&g_pad, 1);
+    const bool stick_scrolling = stick_l.x > 10000 || stick_l.x < -10000 ||
+                                 stick_r.x > 10000 || stick_r.x < -10000;
+    if (over_list && pointerMoved && !atScrollEdge && !stick_scrolling &&
+        !menuIsSettingsMenu() && menu->nEntries > 0) {
         int i = 0;
         for (menuEntry_s* me = menu->firstEntry; me; me = me->next, i++) {
             int start_x = list->posStart[0] + i * list->posEnd[0];
             if (s_mouseX >= start_x + menu->xPos &&
                 s_mouseX <= start_x + menu->xPos + (int)list->size[0]) {
                 menu->curEntry = i;
+                menu->holdXPos = true;
                 break;
             }
         }

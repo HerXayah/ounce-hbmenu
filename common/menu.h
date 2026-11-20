@@ -43,6 +43,7 @@ struct menu_s_tag
     int curEntry;
     int xPos;
     int slideSpeed;
+    bool holdXPos;
 
     char dirname[PATH_MAX+1];
 };
@@ -124,6 +125,8 @@ void launchMenuNetloaderTask();
 char *menuGetRootPath(void);
 char *menuGetRootBasePath(void);
 
+void menuScrollBy(menu_s* menu, int delta);
+void menuScrollPage(menu_s* menu, int direction);
 void menuHandleAButton(void);
 void menuHandleXButton(void);
 

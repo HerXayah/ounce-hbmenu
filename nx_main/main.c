@@ -156,7 +156,7 @@ int main(int argc, char **argv)
         // Scan the gamepad. This should be done once for each frame
         padUpdate(&g_pad);
         padRepeaterUpdate(&g_pad_repeater, padGetButtons(&g_pad) & (
-            HidNpadButton_AnyLeft | HidNpadButton_AnyUp | HidNpadButton_AnyRight | HidNpadButton_AnyDown
+            HidNpadButton_Left | HidNpadButton_Up | HidNpadButton_Right | HidNpadButton_Down
         ));
 
         if (!error_screen) {
@@ -219,9 +219,24 @@ int main(int argc, char **argv)
 }
 
 u64 menuGetKeysDown(void) {
-    u64 keys = padGetButtonsDown(&g_pad);
-    keys |= padRepeaterGetButtons(&g_pad_repeater);
+    /* Analog-stick pseudo-buttons must not count as controller input: in
+     * mouse mode the sticks scroll the list instead of moving the selection. */
+    const u64 stick_pseudo =
+        HidNpadButton_StickLLeft | HidNpadButton_StickLUp |
+        HidNpadButton_StickLRight | HidNpadButton_StickLDown |
+        HidNpadButton_StickRLeft | HidNpadButton_StickRUp |
+        HidNpadButton_StickRRight | HidNpadButton_StickRDown;
+    u64 keys = padGetButtonsDown(&g_pad) & ~stick_pseudo;
+    keys |= padRepeaterGetButtons(&g_pad_repeater) & ~stick_pseudo;
     return keys;
+}
+
+static void mouseStickScroll(menu_s* menu) {
+    const HidAnalogStickState left = padGetStickPos(&g_pad, 0);
+    const HidAnalogStickState right = padGetStickPos(&g_pad, 1);
+    const int x = abs(left.x) > abs(right.x) ? left.x : right.x;
+    if (x > 10000 || x < -10000)
+        menuScrollBy(menu, -x / 4096);
 }
 
 //This is implemented here due to the hid code.
@@ -243,6 +258,9 @@ bool menuUpdate(void) {
 
     handleTouch(menu);
     handleMouse(menu);
+    if (mouse_mode && !menuIsSettingsMenu() &&
+        !menuIsMsgBoxOpen() && !menuIsConfirmMsgBoxOpen())
+        mouseStickScroll(menu);
 
     // A confirmation box takes only its two choices.
     if (menuIsConfirmMsgBoxOpen())
@@ -336,6 +354,8 @@ bool menuUpdate(void) {
         int newEntry = menu->curEntry + move;
         if (newEntry < 0) newEntry = 0;
         if (newEntry >= menu->nEntries) newEntry = menu->nEntries-1;
+        if (newEntry != menu->curEntry)
+            menu->holdXPos = false;
         menu->curEntry = newEntry;
     }
 

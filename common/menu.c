@@ -113,6 +113,27 @@ void launchMenuBackTask() {
 
 }
 
+void menuScrollBy(menu_s* menu, int delta) {
+    ThemeLayoutObject* tiles = &themeCurrent.layoutObjects[ThemeLayoutId_MenuListTiles];
+    ThemeLayoutObject* list = &themeCurrent.layoutObjects[ThemeLayoutId_MenuList];
+    const int visible = tiles->posEnd[0];
+    const int entry_w = list->posEnd[0];
+    if (!delta || visible <= 0 || entry_w <= 0 || menu->nEntries <= visible)
+        return;
+
+    const int min_x = -(menu->nEntries - visible) * entry_w;
+    menu->xPos += delta;
+    if (menu->xPos > 0) menu->xPos = 0;
+    if (menu->xPos < min_x) menu->xPos = min_x;
+    menu->slideSpeed = 0;
+    menu->holdXPos = true;
+}
+
+void menuScrollPage(menu_s* menu, int direction) {
+    ThemeLayoutObject* list = &themeCurrent.layoutObjects[ThemeLayoutId_MenuList];
+    menuScrollBy(menu, -direction * list->posEnd[0]);
+}
+
 void menuHandleAButton(void) {
     menu_s* menu = menuGetCurrent();
 
@@ -783,6 +804,42 @@ u32 drawStatus() {
     return tmpX;
 }
 
+static void fillRect(int x, int y, int width, int height, color_t color) {
+    for (int row = 0; row < height; row++) {
+        int col = 0;
+        for (; col + 3 < width; col += 4)
+            Draw4PixelsRaw(x + col, y + row, color);
+        for (; col < width; col++)
+            DrawPixelRaw(x + col, y + row, color);
+    }
+}
+
+static void drawMenuScrollbar(menu_s* menu) {
+    ThemeLayoutObject* list = &themeCurrent.layoutObjects[ThemeLayoutId_MenuList];
+    ThemeLayoutObject* tiles = &themeCurrent.layoutObjects[ThemeLayoutId_MenuListTiles];
+    const int visible = tiles->posEnd[0];
+    if (visible <= 0 || menu->nEntries <= visible)
+        return;
+
+    const int track_x = list->posStart[0];
+    const int track_w = HBMENU_LOGICAL_WIDTH - track_x * 2;
+    const int track_y = list->posStart[1] + list->size[1] + 10;
+    const int track_h = 4;
+    const int entry_w = list->posEnd[0];
+    const int max_start = menu->nEntries - visible;
+    int start = entry_w > 0 ? (int)(-menu->xPos / entry_w + 0.5f) : 0;
+    if (start < 0) start = 0;
+    if (start > max_start) start = max_start;
+
+    int thumb_w = track_w * visible / menu->nEntries;
+    if (thumb_w < 40) thumb_w = 40;
+    if (thumb_w > track_w) thumb_w = track_w;
+    const int thumb_x = track_x + (track_w - thumb_w) * start / max_start;
+
+    fillRect(track_x, track_y, track_w, track_h, themeCurrent.borderColor);
+    fillRect(thumb_x, track_y, thumb_w, track_h, themeCurrent.textColor);
+}
+
 void drawButtons(menu_s* menu, bool emptyDir, int *out_basePos) {
     ThemeLayoutObject *layoutobj = &themeCurrent.layoutObjects[ThemeLayoutId_ButtonA];
     int basePos[2]={0};
@@ -990,7 +1047,10 @@ void menuLoop(void) {
 
         // Gentle Realign only when not manually moving
         if (menu->slideSpeed == 0) {
-            if (menu->nEntries > entries_count) {
+            if (menu->holdXPos) {
+                v = 0;
+            }
+            else if (menu->nEntries > entries_count) {
                 int wanted_x = clamp(-menu->curEntry * layoutobj->posEnd[0], -(menu->nEntries - entries_count) * layoutobj->posEnd[0], 0);
                 menu->xPos += v;
                 v += (wanted_x - menu->xPos) / 3;
@@ -1040,6 +1100,8 @@ void menuLoop(void) {
 
             drawEntry(me, entry_draw_x, is_active);
         }
+
+        drawMenuScrollbar(menu);
 
         layoutobj = &themeCurrent.layoutObjects[ThemeLayoutId_MenuTypeMsg];
         int getX=0;
