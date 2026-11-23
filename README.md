@@ -30,6 +30,13 @@ with additional Switch 2 and PS4 UI styles. The original project is by
 [ImDella](https://github.com/ImDella). kaiHEN plugins can expose their own
 options under Settings -> Plugins through the API in
 [kaihen/plugin_settings.h](https://github.com/HerXayah/okaihen/blob/main/libkaihen/include/kaihen/plugin_settings.h).
+Plugins appear automatically once they publish a service with
+`pluginRuntimeInitializeWithService` and serve the reserved settings
+commands; boolean options render as live On/Off toggles, changes apply
+instantly without a reboot, and pressing Y in the tab refreshes the plugin
+list. Plugins can also hot-swap their own code without a reboot by splitting
+into a thin host `.nso` plus a reloadable payload `.nro`
+([kaihen/plugin_payload.h](https://github.com/HerXayah/okaihen/blob/main/libkaihen/include/kaihen/plugin_payload.h)).
 
 The following [pacman packages](https://devkitpro.org/wiki/devkitPro_pacman) are required to build for Switch:
 - `switch-dev`
