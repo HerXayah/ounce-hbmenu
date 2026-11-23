@@ -9224,7 +9224,9 @@ static void changePluginSetting(int delta) {
     KaihenPluginSetting *option = &plugin->options[s_plugin_option_sel];
     int value = option->value + delta * (option->step ? option->step : 1);
     if (option->type == KaihenPluginSetting_Bool) {
-        value = delta > 0 ? 1 : 0;
+        /* A / arrows flip a Bool instead of forcing a direction, so
+         * pressing A on an already-on toggle visibly turns it off. */
+        value = option->value ? 0 : 1;
     } else {
         if (value < option->min) value = option->min;
         if (value > option->max) value = option->max;
@@ -9463,7 +9465,6 @@ static void drawSettingsView(void) {
                 if (ps4) {
                     if (focused)
                         drawPS4ListOutline(SETTINGS_LIST_X, ry + 2.0f, SETTINGS_LIST_W, SETTINGS_ROW_H - 4.0f);
-                    renderCircleF(SETTINGS_LIST_X + 40.0f, rcy, 16.0f, 0xFFA76CFF);
                 } else if (focused) {
                     uint32_t row_bg = dark ? makeRGBA(42, 44, 52, 255) : makeRGBA(255, 255, 255, 255);
                     renderRoundedRectF(SETTINGS_LIST_X, ry + 4.0f, SETTINGS_LIST_W,

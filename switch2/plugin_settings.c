@@ -68,6 +68,9 @@ int hbPluginSettingsLoad(HbPluginSettingsList* out) {
         HbPluginSettings* entry = &out->plugins[out->count];
         copyName(entry->name, sizeof(entry->name),
                  info.name[0] ? info.name : plugin_name.name);
+        /* HEN opens plugins by the name the bootstrap registered (the
+         * file name), not by the display name from GetInfo. */
+        copyName(entry->reg_name, sizeof(entry->reg_name), plugin_name.name);
         u32 option_count = info.count;
         if (option_count > HB_PLUGIN_OPTION_MAX)
             option_count = HB_PLUGIN_OPTION_MAX;
@@ -105,7 +108,7 @@ bool hbPluginSettingsSet(const HbPluginSettings* plugin, const char* key,
 
     HenPluginName plugin_name;
     memset(&plugin_name, 0, sizeof(plugin_name));
-    copyName(plugin_name.name, sizeof(plugin_name.name), plugin->name);
+    copyName(plugin_name.name, sizeof(plugin_name.name), plugin->reg_name);
 
     Service service;
     bool applied = false;

@@ -12,7 +12,8 @@
 #define HB_PLUGIN_OPTION_MAX 9
 
 typedef struct {
-    char name[HEN_PLUGIN_NAME_SIZE];
+    char name[HEN_PLUGIN_NAME_SIZE];      /* display name (GetInfo, may be a label) */
+    char reg_name[HEN_PLUGIN_NAME_SIZE];  /* name HEN registered the plugin under */
     KaihenPluginSetting options[HB_PLUGIN_OPTION_MAX];
     int option_count;
 } HbPluginSettings;
