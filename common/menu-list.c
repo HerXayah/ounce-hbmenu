@@ -189,6 +189,15 @@ void menuHiddenLoad(void) {
     fclose(file);
 }
 
+bool menuHiddenFoldersEnabled(void) {
+    return s_hideFolders;
+}
+
+void menuHiddenToggle(void) {
+    s_hideFolders = !s_hideFolders;
+    hiddenFoldersSave();
+}
+
 void settingsMenuScan(const char* target) {
     menuClear();
     menu_s* menu = &s_menu[!s_curMenu];

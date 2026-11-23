@@ -6,6 +6,10 @@
 #include "../common/common.h"
 #include "nx_graphics.h"
 #include "nx_touch.h"
+#ifdef __SWITCH2__
+#include "../switch2/switch2_ui.h"
+#include "../switch2/switch2_sfx.h"
+#endif
 
 // Define the desired framebuffer resolution (here we set it to 720p).
 #ifdef __SWITCH2__
@@ -51,7 +55,7 @@ int main(int argc, char **argv)
 
     padConfigureInput(8, HidNpadStyleSet_NpadStandard);
     padInitializeAny(&g_pad);
-    padRepeaterInitialize(&g_pad_repeater, 20, 10);
+    padRepeaterInitialize(&g_pad_repeater, 23, 5); /* ~383ms hold delay, ~83ms repeat */
     hidSetNpadHandheldActivationMode(HidNpadHandheldActivationMode_Single);
     touchInit();
 
@@ -113,6 +117,13 @@ int main(int argc, char **argv)
 
     if (R_SUCCEEDED(rc)) menuStartup();
 
+    #ifdef __SWITCH2__
+    if (R_SUCCEEDED(rc)) {
+        switch2SfxInit();
+        switch2UiInit((ThemePreset)theme);
+    }
+    #endif
+
     if (R_SUCCEEDED(rc)) {
         if (!launchInit()) {
             rc = 2;
@@ -156,7 +167,9 @@ int main(int argc, char **argv)
         // Scan the gamepad. This should be done once for each frame
         padUpdate(&g_pad);
         padRepeaterUpdate(&g_pad_repeater, padGetButtons(&g_pad) & (
-            HidNpadButton_Left | HidNpadButton_Up | HidNpadButton_Right | HidNpadButton_Down
+            HidNpadButton_Left | HidNpadButton_Up | HidNpadButton_Right | HidNpadButton_Down |
+            HidNpadButton_StickLLeft | HidNpadButton_StickLUp |
+            HidNpadButton_StickLRight | HidNpadButton_StickLDown
         ));
 
         if (!error_screen) {
@@ -203,6 +216,9 @@ int main(int argc, char **argv)
     #endif
 
     mouseExit();
+    #ifdef __SWITCH2__
+    switch2SfxExit();
+    #endif
     fontExit();
     launchExit();
     netloaderSignalExit();
@@ -219,15 +235,18 @@ int main(int argc, char **argv)
 }
 
 u64 menuGetKeysDown(void) {
-    /* Analog-stick pseudo-buttons must not count as controller input: in
-     * mouse mode the sticks scroll the list instead of moving the selection. */
-    const u64 stick_pseudo =
-        HidNpadButton_StickLLeft | HidNpadButton_StickLUp |
-        HidNpadButton_StickLRight | HidNpadButton_StickLDown |
+    /* Left-stick pseudo-buttons repeat like the d-pad (stripped only in
+     * mouse mode, where the sticks scroll the list instead); the right
+     * stick is never navigation. */
+    const u64 right_stick_pseudo =
         HidNpadButton_StickRLeft | HidNpadButton_StickRUp |
         HidNpadButton_StickRRight | HidNpadButton_StickRDown;
-    u64 keys = padGetButtonsDown(&g_pad) & ~stick_pseudo;
-    keys |= padRepeaterGetButtons(&g_pad_repeater) & ~stick_pseudo;
+    const u64 left_stick_pseudo =
+        HidNpadButton_StickLLeft | HidNpadButton_StickLUp |
+        HidNpadButton_StickLRight | HidNpadButton_StickLDown;
+    const u64 mask = right_stick_pseudo | (mouseIsActive() ? left_stick_pseudo : 0);
+    u64 keys = padGetButtonsDown(&g_pad) & ~mask;
+    keys |= padRepeaterGetButtons(&g_pad_repeater) & ~mask;
     return keys;
 }
 
@@ -245,8 +264,19 @@ bool menuUpdate(void) {
     menu_s* menu = menuGetCurrent();
     const bool mouse_mode = mouseIsActive();
     u64 down = menuGetKeysDown();
+
+#ifdef __SWITCH2__
+    handleMouse(menu);
     if (down)
         mouseControllerInput();
+    switch2HandleTouch(menu);
+    switch2SetHeldButtons(padGetButtons(&g_pad));
+    return switch2MenuUpdate(down);
+#endif
+
+    if (down)
+        mouseControllerInput();
+
     /* Official Switch 2 bindings: R and ZR both execute; B is Back. */
     if (down & HidNpadButton_R)
         down = (down & ~HidNpadButton_R) | HidNpadButton_A;

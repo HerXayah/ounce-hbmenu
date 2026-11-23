@@ -26,7 +26,7 @@ include $(DEVKITPRO)/libounce/switch2_rules
 
 APP_VERSION	:=	1337.69421.l33t
 APP_TITLE	:=	hbmenu
-APP_AUTHOR	:=	switchbrew, Miella Selene / Xayah
+APP_AUTHOR	:=	switchbrew, ImDella, Miella Selene / Xayah
 
 TARGET		:=	hbmenu
 BUILD		?=	build/sdk
@@ -55,7 +55,7 @@ CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(LIBNX)/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:= -lvulkan `$(PREFIX)pkg-config --libs $(PKGS)` -lnx
+LIBS	:= -lvulkan `$(PREFIX)pkg-config --libs $(PKGS)` -lkaihen -lnx
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing

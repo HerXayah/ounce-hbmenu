@@ -101,6 +101,8 @@ void menuEntryParseNacp(menuEntry_s* me);
 void menuEntryFileassocLoad(const char* filepath);
 
 void menuHiddenLoad(void);
+bool menuHiddenFoldersEnabled(void);
+void menuHiddenToggle(void);
 void settingsMenuScan(const char* target);
 void settingsMenuToggleCurrent(void);
 void settingsMenuStartup(void);
@@ -131,6 +133,7 @@ void menuHandleAButton(void);
 void menuHandleXButton(void);
 
 bool menuIsNetloaderActive(void);
+bool menuIsThemeMenuActive(void);
 bool menuIsSettingsMenu(void);
 
 #ifdef __cplusplus

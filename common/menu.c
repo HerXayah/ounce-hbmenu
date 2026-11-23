@@ -2,6 +2,10 @@
 #include "common.h"
 #include "netloader.h"
 
+#ifdef __SWITCH2__
+#include "../switch2/switch2_ui.h"
+#endif
+
 #ifndef __SWITCH__
 #include "switch/runtime/nxlink.h"
 #endif
@@ -259,6 +263,10 @@ void launchApplyThemeTask(menuEntry_s* arg) {
 
 bool menuIsNetloaderActive(void) {
     return hbmenu_state == HBMENU_NETLOADER_ACTIVE;
+}
+
+bool menuIsThemeMenuActive(void) {
+    return hbmenu_state == HBMENU_THEME_MENU;
 }
 
 bool menuIsSettingsMenu(void) {
@@ -911,6 +919,49 @@ void menuLoop(void) {
     int curPos[2]={0};
     netloaderState netloader_state;
     ThemeLayoutObject *layoutobj = NULL;
+
+#ifdef __SWITCH2__
+    menuTimer += 0.05;
+
+    memset(&netloader_state, 0, sizeof(netloader_state));
+    netloaderGetState(&netloader_state);
+
+    if (hbmenu_state == HBMENU_DEFAULT && netloader_state.activated) {
+        hbmenu_state = HBMENU_NETLOADER_ACTIVE;
+        menuCloseMsgBox();
+        menuCreateMsgBox(780, 300, "");
+    } else if (hbmenu_state == HBMENU_NETLOADER_ACTIVE && !netloader_state.activated && !netloader_state.launch_app) {
+        hbmenu_state = HBMENU_DEFAULT;
+        menuScan(".");
+        menuCloseMsgBox();
+        menuMsgBoxSetNetloaderState(0, NULL, 0, 0);
+    }
+
+    if (netloader_state.errormsg[0]) {
+        menuCloseMsgBox();
+        menuCreateMsgBox(780, 300, netloader_state.errormsg);
+    }
+
+    if (hbmenu_state == HBMENU_NETLOADER_ACTIVE) {
+        menuUpdateNetloader(&netloader_state);
+        if (netloader_state.launch_app) {
+            hbmenu_state = HBMENU_DEFAULT;
+            menuCloseMsgBox();
+            menuMsgBoxSetNetloaderState(0, NULL, 0, 0);
+            menuCreateMsgBox(240, 240, textGetString(StrId_Loading));
+            launchMenuEntryTask(netloader_state.me);
+        }
+    }
+
+    switch2MenuDraw();
+    menuDrawMsgBox();
+#ifdef __SWITCH2__
+    extern void drawMouseCursor(void);
+    drawMouseCursor();
+#endif
+    (void)me; (void)menu; (void)i; (void)x; (void)y; (void)endy; (void)curPos;
+    return;
+#endif
 
     for (i=0; i<3; i++) {
         if (i==2) layoutobj = &themeCurrent.layoutObjects[ThemeLayoutId_BackWave];

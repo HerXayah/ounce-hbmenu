@@ -9,6 +9,7 @@
 
 #ifdef __SWITCH2__
 #include "../switch2/render.h"
+#include "../switch2/switch2_ui.h"
 #endif
 
 #define TAP_MOVEMENT_GAP 20
@@ -219,8 +220,9 @@ void handleMouse(menu_s* menu) {
         padPointerUpdate(&s_pointer, &g_pad);
         connected = s_pointer.active || s_pointerReady;
         if (s_pointer.active) {
-            x = s_pointer.x;
-            y = s_pointer.y;
+            /* Softer pointer follow than the raw absolute position. */
+            x = s_mouseX + (int)((float)(s_pointer.x - s_mouseX) * 0.45f);
+            y = s_mouseY + (int)((float)(s_pointer.y - s_mouseY) * 0.45f);
             pointerMoved = s_pointer.delta_x != 0 || s_pointer.delta_y != 0;
             left = (s_pointer.buttons_cur & HidMouseButton_Left) != 0;
             right = (s_pointer.buttons_cur & HidMouseButton_Right) != 0;
@@ -261,6 +263,18 @@ void handleMouse(menu_s* menu) {
     if (s_mouseX > 1279) s_mouseX = 1279;
     if (s_mouseY < 0) s_mouseY = 0;
     if (s_mouseY > 719) s_mouseY = 719;
+
+#ifdef __SWITCH2__
+    if (pointerMoved)
+        s_mouseVisible = true;
+    if (s_mouseVisible && (pointerMoved || left || right))
+        switch2HandlePointer(s_mouseX, s_mouseY,
+                             left && !s_mouseLeft, right && !s_mouseRight,
+                             pointerMoved);
+    s_mouseLeft = left;
+    s_mouseRight = right;
+    return;
+#endif
 
     /* Edge auto-scroll: while the cursor is visible and parked at a screen
      * edge, walk the selection so the list scrolls in that direction. */
