@@ -154,11 +154,13 @@ static bool s_exit_requested = false;
 
 enum { SETTINGS_TAB_GENERAL = 0, SETTINGS_TAB_PLUGINS = 1, SETTINGS_TAB_THEMES = 2 };
 static int s_settings_tab = SETTINGS_TAB_GENERAL;
-static int s_plugin_view = 0; /* 0 = plugin list, 1 = one plugin's options */
+static int s_plugin_view = 0; /* 0 = plugin list, 1 = one plugin's options, 2 = game mod packs */
 static int s_plugin_sel = 0;
 static int s_plugin_option_sel = 0;
 static HbPluginSettingsList s_plugin_settings;
 static bool s_plugin_settings_loaded = false;
+static HbModPackList s_mod_packs;
+static int s_mod_pack_sel = 0;
 #define MAX_THEMES 16
 static char s_theme_paths[MAX_THEMES][PATH_MAX];
 static char s_theme_names[MAX_THEMES][96];
@@ -1754,11 +1756,9 @@ static void drawAppTile(menuEntry_s *me, float x, float y, float w, float h,
                                        g_ps4_disc_icon_rgba_H, dx_i, dy_i, disc_sz, disc_sz,
                                        RenderImageFormat_Rgba32, makeRGBA(230, 0, 18, alpha));
                 } else if (me->game_platform == 1) {
-                    renderRoundedRectF(dx_i + 1.0f, dy_i + 1.0f, disc_sz - 2.0f, disc_sz - 2.0f,
-                                       4.0f, makeRGBA(155, 160, 170, alpha));
                     renderImageScaledF(g_ps4_disc_icon_rgba, g_ps4_disc_icon_rgba_W,
                                        g_ps4_disc_icon_rgba_H, dx_i, dy_i, disc_sz, disc_sz,
-                                       RenderImageFormat_Rgba32, makeRGBA(18, 20, 24, alpha));
+                                       RenderImageFormat_Rgba32, makeRGBA(24, 26, 30, alpha));
                 } else {
                     renderImageScaledF(g_ps4_disc_icon_rgba, g_ps4_disc_icon_rgba_W,
                                        g_ps4_disc_icon_rgba_H, dx_i, dy_i, disc_sz, disc_sz,
@@ -1908,9 +1908,7 @@ static void drawFocusedHeaderInfo(menuEntry_s *me, float center_x, float title_y
             renderRoundedRectF(cur_x, title_y - 16.0f, 14.0f, 18.0f, 3.0f, makeRGBA(230, 0, 18, 255));
             renderRectF(cur_x + 3.5f, title_y - 4.0f, 7.0f, 2.0f, makeRGBA(255, 232, 234, 255));
         } else if (me->game_platform == 1) {
-            /* Switch 1 game card: black (with subtle rim so it stays crisp on dark themes) */
-            renderRoundedRectF(cur_x - 1.0f, title_y - 17.0f, 16.0f, 20.0f, 3.5f,
-                               dark ? makeRGBA(145, 150, 162, 255) : makeRGBA(80, 84, 92, 255));
+            /* Switch 1 game card: black */
             renderRoundedRectF(cur_x, title_y - 16.0f, 14.0f, 18.0f, 3.0f, makeRGBA(18, 20, 24, 255));
             renderRectF(cur_x + 3.5f, title_y - 4.0f, 7.0f, 2.0f, makeRGBA(180, 185, 196, 255));
         } else {
@@ -9249,15 +9247,31 @@ static void changePluginSetting(int delta) {
     if (s_plugin_option_sel < 0 || s_plugin_option_sel >= plugin->option_count)
         return;
     KaihenPluginSetting *option = &plugin->options[s_plugin_option_sel];
-    if (strcmp(plugin->reg_name, "nupvfs") == 0 &&
-        strcmp(option->key, HB_PLUGIN_KEY_COPY_SAVES) == 0) {
-        if (delta <= 0)
+    if (strcmp(plugin->reg_name, "nupvfs") == 0) {
+        if (strcmp(option->key, HB_PLUGIN_KEY_COPY_SAVES) == 0) {
+            if (delta <= 0) return;
+            char summary[320];
+            bool ok = hbCopyNandSavesToSd(summary, sizeof summary);
+            switch2SfxPlay(ok ? S2Sfx_Confirm : S2Sfx_Back);
+            menuCreateMsgBox(660, 280, summary);
             return;
-        char summary[320];
-        bool ok = hbCopyNandSavesToSd(summary, sizeof summary);
-        switch2SfxPlay(ok ? S2Sfx_Confirm : S2Sfx_Back);
-        menuCreateMsgBox(660, 280, summary);
-        return;
+        }
+        if (strcmp(option->key, HB_PLUGIN_KEY_CLEAR_CACHE) == 0) {
+            if (delta <= 0) return;
+            char summary[256];
+            bool ok = hbClearRomfsCache(summary, sizeof summary);
+            switch2SfxPlay(ok ? S2Sfx_Confirm : S2Sfx_Back);
+            menuCreateMsgBox(620, 240, summary);
+            return;
+        }
+        if (strcmp(option->key, HB_PLUGIN_KEY_MANAGE_MODS) == 0) {
+            if (delta <= 0) return;
+            hbModPacksLoad(&s_mod_packs);
+            s_mod_pack_sel = 0;
+            s_plugin_view = 2;
+            switch2SfxPlay(S2Sfx_Confirm);
+            return;
+        }
     }
     int value = option->value + delta * (option->step ? option->step : 1);
     if (option->type == KaihenPluginSetting_Bool) {
@@ -9284,8 +9298,11 @@ static void changePluginSetting(int delta) {
 
 static const char *pluginOptionValue(const KaihenPluginSetting *option, char *buf,
                                      size_t buf_size) {
-    if (strcmp(option->key, HB_PLUGIN_KEY_COPY_SAVES) == 0)
+    if (strcmp(option->key, HB_PLUGIN_KEY_COPY_SAVES) == 0 ||
+        strcmp(option->key, HB_PLUGIN_KEY_CLEAR_CACHE) == 0)
         return "Run";
+    if (strcmp(option->key, HB_PLUGIN_KEY_MANAGE_MODS) == 0)
+        return "Open";
     if (option->type == KaihenPluginSetting_Bool)
         return option->value ? "On" : "Off";
     snprintf(buf, buf_size, "%u", option->value);
@@ -9499,6 +9516,48 @@ static void drawSettingsView(void) {
                              focused ? accent : muted, countBuf);
                 }
             }
+        } else if (s_plugin_view == 2) {
+            if (s_mod_packs.count == 0) {
+                DrawText(interuiregular18, (uint32_t)(SETTINGS_LIST_X + 28.0f),
+                         (uint32_t)(SETTINGS_LIST_Y + 42.0f + y_off), muted,
+                         "No mod packs in /kaihen/mods/<tid>/packs/<name>");
+            } else {
+                const int max_vis = 8;
+                int start = s_mod_pack_sel >= max_vis ? (s_mod_pack_sel - max_vis + 1) : 0;
+                int end = start + max_vis;
+                if (end > s_mod_packs.count) end = s_mod_packs.count;
+                for (int i = start; i < end; i++) {
+                    const HbModPackEntry *pack = &s_mod_packs.packs[i];
+                    float ry = SETTINGS_LIST_Y + (float)(i - start) * SETTINGS_ROW_H + y_off;
+                    float rcy = ry + SETTINGS_ROW_H * 0.5f;
+                    bool focused = (i == s_mod_pack_sel);
+                    const float label_x = SETTINGS_LIST_X + 28.0f;
+                    if (ps4) {
+                        if (focused)
+                            drawPS4ListOutline(SETTINGS_LIST_X, ry + 2.0f, SETTINGS_LIST_W, SETTINGS_ROW_H - 4.0f);
+                    } else if (focused) {
+                        uint32_t row_bg = dark ? makeRGBA(42, 44, 52, 255) : makeRGBA(255, 255, 255, 255);
+                        renderRoundedRectF(SETTINGS_LIST_X, ry + 4.0f, SETTINGS_LIST_W,
+                                           SETTINGS_ROW_H - 8.0f, 12.0f, row_bg);
+                        renderRoundedRectF(SETTINGS_LIST_X + 10.0f, ry + 18.0f, 4.5f,
+                                           SETTINGS_ROW_H - 36.0f, 2.25f,
+                                           accent.abgr | 0xff000000u);
+                    }
+                    DrawTextTruncate(interuiregular18, (uint32_t)label_x,
+                                     (uint32_t)(rcy + fontBaselineOffset(interuiregular18)),
+                                     focused ? txt : makeColorMuted(txt, dark ? 220 : 210),
+                                     pack->label, 560, "...");
+                    const char *vstr = pack->enabled ? "On" : "Off";
+                    char valBuf[32];
+                    snprintf(valBuf, sizeof(valBuf), focused ? "\u25C2  %s  \u25B8" : "%s", vstr);
+                    uint32_t vw = 0, vh = 0;
+                    GetTextDimensions(interuiregular18, valBuf, &vw, &vh);
+                    DrawText(interuiregular18,
+                             (uint32_t)(SETTINGS_LIST_X + SETTINGS_LIST_W - 26.0f - (float)vw),
+                             (uint32_t)(rcy + fontBaselineOffset(interuiregular18)),
+                             focused ? accent : muted, valBuf);
+                }
+            }
         } else if (s_plugin_sel < s_plugin_settings.count) {
             const HbPluginSettings *plugin = &s_plugin_settings.plugins[s_plugin_sel];
             for (int i = 0; i < plugin->option_count; i++) {
@@ -9525,7 +9584,9 @@ static void drawSettingsView(void) {
                 char valueBuf[32];
                 const char *value = pluginOptionValue(option, valueBuf, sizeof(valueBuf));
                 char valBuf[64];
-                if (strcmp(option->key, HB_PLUGIN_KEY_COPY_SAVES) == 0)
+                if (strcmp(option->key, HB_PLUGIN_KEY_COPY_SAVES) == 0 ||
+                    strcmp(option->key, HB_PLUGIN_KEY_CLEAR_CACHE) == 0 ||
+                    strcmp(option->key, HB_PLUGIN_KEY_MANAGE_MODS) == 0)
                     snprintf(valBuf, sizeof(valBuf), focused ? "[A] %s" : "%s", value);
                 else if (focused)
                     snprintf(valBuf, sizeof(valBuf), "\u25C2  %s  \u25B8", value);
@@ -9788,10 +9849,31 @@ bool switch2MenuUpdate(u64 down) {
         return true;
     }
 
+    /* Confirmation / message box handling MUST run before Settings so dialogs
+     * opened from Settings (Copy Saves, Clear Cache, errors) consume A/B. */
+    if (menuIsConfirmMsgBoxOpen()) {
+        if (down & HidNpadButton_A) { switch2SfxPlay(S2Sfx_Confirm); menuHandleAButton(); }
+        else if (down & HidNpadButton_B) { switch2SfxPlay(S2Sfx_Back); launchMenuBackTask(); }
+        return false;
+    }
+    if (menuIsMsgBoxOpen() && !menuIsNetloaderActive()) {
+        if (down & (HidNpadButton_A | HidNpadButton_B)) { switch2SfxPlay(S2Sfx_Back); menuCloseMsgBox(); }
+        return false;
+    }
+
     /* Full-screen Switch 2 Settings navigation */
     if (s_view == S2View_Settings) {
-        if (down & HidNpadButton_Plus)
-            return true;
+        if (down & HidNpadButton_Plus) {
+            /* Plus closes Settings back to the menu (never return true, which exits without nextLoad) */
+            switch2SfxPlay(S2Sfx_Back);
+            switch2SettingsSave();
+            s_name_edit = false;
+            s_plugin_view = 0;
+            s_view = s_prev_view;
+            s_focus = s_prev_focus;
+            s_top_idx = s_prev_top_idx;
+            return false;
+        }
         if (down & (HidNpadButton_L | HidNpadButton_R)) {
             const int step = (down & HidNpadButton_R) ? 1 : 2;
             s_settings_tab = (s_settings_tab + step) % 3;
@@ -9809,6 +9891,10 @@ bool switch2MenuUpdate(u64 down) {
         }
         if (down & HidNpadButton_B) {
             switch2SfxPlay(S2Sfx_Back); /* cancel.wav on every menu exit */
+            if (s_settings_tab == SETTINGS_TAB_PLUGINS && s_plugin_view == 2) {
+                s_plugin_view = 1;
+                return false;
+            }
             if (s_settings_tab == SETTINGS_TAB_PLUGINS && s_plugin_view == 1) {
                 s_plugin_view = 0;
                 s_plugin_option_sel = 0;
@@ -9915,6 +10001,26 @@ bool switch2MenuUpdate(u64 down) {
                 return false;
             }
 
+            if (s_plugin_view == 2) {
+                if (down & HidNpadButton_AnyUp) {
+                    if (s_mod_pack_sel > 0) {
+                        s_mod_pack_sel--;
+                        switch2SfxPlay(S2Sfx_Move);
+                    }
+                } else if (down & HidNpadButton_AnyDown) {
+                    if (s_mod_pack_sel + 1 < s_mod_packs.count) {
+                        s_mod_pack_sel++;
+                        switch2SfxPlay(S2Sfx_Move);
+                    }
+                } else if (down & (HidNpadButton_A | HidNpadButton_AnyLeft | HidNpadButton_AnyRight)) {
+                    if (s_mod_pack_sel >= 0 && s_mod_pack_sel < s_mod_packs.count) {
+                        hbModPackToggle(&s_mod_packs.packs[s_mod_pack_sel]);
+                        switch2SfxPlay(S2Sfx_Confirm);
+                    }
+                }
+                return false;
+            }
+
             const int option_count = (s_plugin_sel < s_plugin_settings.count)
                                          ? s_plugin_settings.plugins[s_plugin_sel].option_count : 0;
             if (down & HidNpadButton_AnyUp) {
@@ -9987,26 +10093,11 @@ bool switch2MenuUpdate(u64 down) {
         return false;
     }
 
-    /* Confirmation / message box handling */
-    if (menuIsConfirmMsgBoxOpen()) {
-        if (down & HidNpadButton_A) { switch2SfxPlay(S2Sfx_Confirm); menuHandleAButton(); }
-        else if (down & HidNpadButton_B) { switch2SfxPlay(S2Sfx_Back); launchMenuBackTask(); }
-        else if (down & HidNpadButton_Plus) return true;
-        return false;
-    }
-    if (menuIsMsgBoxOpen() && !menuIsNetloaderActive()) {
-        if (down & (HidNpadButton_A | HidNpadButton_B)) { switch2SfxPlay(S2Sfx_Back); menuCloseMsgBox(); }
-        else if (down & HidNpadButton_Plus) return true;
-        return false;
-    }
-
-    /* While Netloader is active, only allow B (cancel) and + (exit) */
+    /* While Netloader is active, only allow B (cancel) */
     if (menuIsNetloaderActive()) {
         if (down & HidNpadButton_B) {
             switch2SfxPlay(S2Sfx_Back);
             launchMenuBackTask();
-        } else if (down & HidNpadButton_Plus) {
-            return true;
         }
         return false;
     }
@@ -10202,6 +10293,16 @@ bool switch2MenuUpdate(u64 down) {
 
 void switch2HandlePointer(int x, int y, bool left_click, bool right_click,
                           bool moved) {
+    if (menuIsConfirmMsgBoxOpen()) {
+        if (left_click) { switch2SfxPlay(S2Sfx_Confirm); menuHandleAButton(); }
+        else if (right_click) { switch2SfxPlay(S2Sfx_Back); launchMenuBackTask(); }
+        return;
+    }
+    if (menuIsMsgBoxOpen() && !menuIsNetloaderActive()) {
+        if (left_click || right_click) { switch2SfxPlay(S2Sfx_Back); menuCloseMsgBox(); }
+        return;
+    }
+
     if (right_click) {
         switch2SfxPlay(S2Sfx_Back);
         launchMenuBackTask();
@@ -10249,6 +10350,15 @@ void switch2HandlePointer(int x, int y, bool left_click, bool right_click,
                         s_plugin_sel = row;
                         s_plugin_view = 1;
                         s_plugin_option_sel = 0;
+                    }
+                } else if (s_plugin_view == 2) {
+                    const int row = (int)(((float)y - SETTINGS_LIST_Y) / SETTINGS_ROW_H);
+                    const int start = s_mod_pack_sel >= 8 ? (s_mod_pack_sel - 7) : 0;
+                    const int idx = start + row;
+                    if (row >= 0 && idx < s_mod_packs.count) {
+                        s_mod_pack_sel = idx;
+                        hbModPackToggle(&s_mod_packs.packs[idx]);
+                        switch2SfxPlay(S2Sfx_Confirm);
                     }
                 } else if (s_plugin_sel < s_plugin_settings.count) {
                     const int row = (int)(((float)y - SETTINGS_LIST_Y) / SETTINGS_ROW_H);
@@ -10378,6 +10488,17 @@ void switch2HandleTouch(menu_s *menu) {
         if (!was_tap || menuIsNetloaderActive())
             return;
 
+        if (menuIsConfirmMsgBoxOpen()) {
+            switch2SfxPlay(S2Sfx_Confirm);
+            menuHandleAButton();
+            return;
+        }
+        if (menuIsMsgBoxOpen()) {
+            switch2SfxPlay(S2Sfx_Back);
+            menuCloseMsgBox();
+            return;
+        }
+
         /* Settings view tap handling */
         if (s_view == S2View_Settings) {
             if (s_cfg.ui_style == 1) {
@@ -10433,6 +10554,17 @@ void switch2HandleTouch(menu_s *menu) {
                             s_plugin_sel = i;
                             s_plugin_view = 1;
                             s_plugin_option_sel = 0;
+                            return;
+                        }
+                    }
+                } else if (s_plugin_view == 2) {
+                    const int start = s_mod_pack_sel >= 8 ? (s_mod_pack_sel - 7) : 0;
+                    for (int i = start; i < s_mod_packs.count && (i - start) < 8; i++) {
+                        float ry = SETTINGS_LIST_Y + (float)(i - start) * SETTINGS_ROW_H;
+                        if (y1 >= (int)ry && y1 <= (int)(ry + SETTINGS_ROW_H)) {
+                            s_mod_pack_sel = i;
+                            hbModPackToggle(&s_mod_packs.packs[i]);
+                            switch2SfxPlay(S2Sfx_Confirm);
                             return;
                         }
                     }

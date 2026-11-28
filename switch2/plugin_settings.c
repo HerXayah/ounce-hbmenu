@@ -91,14 +91,21 @@ int hbPluginSettingsLoad(HbPluginSettingsList* out) {
         }
         serviceClose(&plugin);
 
-        if (strcmp(entry->reg_name, "nupvfs") == 0 &&
-            entry->option_count < HB_PLUGIN_OPTION_MAX) {
-            KaihenPluginSetting action;
-            memset(&action, 0, sizeof(action));
-            copyName(action.key, sizeof(action.key), HB_PLUGIN_KEY_COPY_SAVES);
-            copyName(action.label, sizeof(action.label), "Copy NAND Saves -> SD");
-            action.type = KaihenPluginSetting_Bool;
-            entry->options[entry->option_count++] = action;
+        if (strcmp(entry->reg_name, "nupvfs") == 0) {
+            static const struct { const char* key; const char* label; } actions[] = {
+                { HB_PLUGIN_KEY_COPY_SAVES,  "Copy NAND Saves -> SD" },
+                { HB_PLUGIN_KEY_CLEAR_CACHE, "Clear RomFS Cache" },
+                { HB_PLUGIN_KEY_MANAGE_MODS, "Manage Game Mods" },
+            };
+            for (size_t a = 0; a < sizeof(actions) / sizeof(actions[0]) &&
+                               entry->option_count < HB_PLUGIN_OPTION_MAX; a++) {
+                KaihenPluginSetting action;
+                memset(&action, 0, sizeof(action));
+                copyName(action.key, sizeof(action.key), actions[a].key);
+                copyName(action.label, sizeof(action.label), actions[a].label);
+                action.type = KaihenPluginSetting_Bool;
+                entry->options[entry->option_count++] = action;
+            }
         }
 
         if (entry->option_count > 0)
@@ -483,5 +490,100 @@ bool hbCopyNandSavesToSd(char* summary, size_t summary_size) {
              titles_copied, st.files_copied,
              (double)st.bytes_copied / (1024.0 * 1024.0),
              backup_count, st.errors);
+    return true;
+}
+
+bool hbClearRomfsCache(char* summary, size_t summary_size) {
+    Service hen;
+    Result rc = openHen(&hen);
+    if (R_FAILED(rc)) {
+        if (summary && summary_size)
+            snprintf(summary, summary_size, "Clear RomFS Cache failed\nopen HEN: 0x%x", rc);
+        return false;
+    }
+    HenPluginName pname;
+    memset(&pname, 0, sizeof(pname));
+    copyName(pname.name, sizeof(pname.name), "nupvfs");
+    Service plugin;
+    rc = henOpenPlugin(&hen, &pname, &plugin);
+    if (R_FAILED(rc)) {
+        serviceClose(&hen);
+        if (summary && summary_size)
+            snprintf(summary, summary_size, "Clear RomFS Cache failed\nopen nupvfs: 0x%x", rc);
+        return false;
+    }
+    // NupVfsCmd_ClearCache = 4
+    rc = serviceDispatch(&plugin, 4);
+    serviceClose(&plugin);
+    serviceClose(&hen);
+    if (R_FAILED(rc)) {
+        if (summary && summary_size)
+            snprintf(summary, summary_size, "Clear RomFS Cache failed\ncmd 4: 0x%x", rc);
+        return false;
+    }
+    if (summary && summary_size)
+        snprintf(summary, summary_size, "Cleared nupvfs RomFS cache.\nNext launch rescans all mods.");
+    return true;
+}
+
+static bool fileExistsSimple(const char* path) {
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+int hbModPacksLoad(HbModPackList* out) {
+    if (!out) return 0;
+    memset(out, 0, sizeof(*out));
+    DIR* md = opendir("sdmc:/kaihen/mods");
+    if (!md) return 0;
+    struct dirent* tid_ent;
+    while ((tid_ent = readdir(md)) != NULL && out->count < HB_MOD_PACK_MAX) {
+        if (tid_ent->d_name[0] == '.') continue;
+        char* endp = NULL;
+        u64 tid = strtoull(tid_ent->d_name, &endp, 16);
+        if (!tid || !endp || *endp != '\0') continue;
+
+        char packs_dir[320];
+        snprintf(packs_dir, sizeof(packs_dir), "sdmc:/kaihen/mods/%s/packs", tid_ent->d_name);
+        DIR* pd = opendir(packs_dir);
+        if (!pd) continue;
+        struct dirent* pent;
+        while ((pent = readdir(pd)) != NULL && out->count < HB_MOD_PACK_MAX) {
+            const char* nm = pent->d_name;
+            if (!nm[0] || nm[0] == '.' || nm[0] == '_') continue;
+            char full[256];
+            snprintf(full, sizeof(full), "%s/%s", packs_dir, nm);
+            struct stat st;
+            if (stat(full, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+
+            char dis[300];
+            snprintf(dis, sizeof(dis), "%s/.disabled", full);
+            HbModPackEntry* e = &out->packs[out->count++];
+            e->tid = tid;
+            snprintf(e->pack_dir, sizeof(e->pack_dir), "%s", full);
+            snprintf(e->label, sizeof(e->label), "[%04llx] %s",
+                     (unsigned long long)(tid & 0xffffULL), nm);
+            e->enabled = !fileExistsSimple(dis);
+        }
+        closedir(pd);
+    }
+    closedir(md);
+    return out->count;
+}
+
+bool hbModPackToggle(HbModPackEntry* pack) {
+    if (!pack || !pack->pack_dir[0]) return false;
+    char dis[300];
+    snprintf(dis, sizeof(dis), "%s/.disabled", pack->pack_dir);
+    if (pack->enabled) {
+        FILE* f = fopen(dis, "wb");
+        if (!f) return false;
+        fclose(f);
+        pack->enabled = false;
+    } else {
+        remove(dis);
+        pack->enabled = true;
+    }
+    hbClearRomfsCache(NULL, 0);
     return true;
 }

@@ -10,7 +10,22 @@
 
 #define HB_PLUGIN_MAX 16
 #define HB_PLUGIN_OPTION_MAX 9
-#define HB_PLUGIN_KEY_COPY_SAVES "__copy_nand_saves"
+#define HB_PLUGIN_KEY_COPY_SAVES  "__copy_nand_saves"
+#define HB_PLUGIN_KEY_CLEAR_CACHE "__clear_romfs_cache"
+#define HB_PLUGIN_KEY_MANAGE_MODS "__manage_game_mods"
+#define HB_MOD_PACK_MAX 64
+
+typedef struct {
+    u64 tid;
+    char label[128];
+    char pack_dir[256];
+    bool enabled;
+} HbModPackEntry;
+
+typedef struct {
+    HbModPackEntry packs[HB_MOD_PACK_MAX];
+    int count;
+} HbModPackList;
 
 typedef struct {
     char name[HEN_PLUGIN_NAME_SIZE];      /* display name (GetInfo, may be a label) */
@@ -41,3 +56,12 @@ bool hbPluginGetBool(const char* reg_name, const char* key, bool default_val);
 /// Read-only copies matching console NAND saves to sdmc:/kaihen/saves/<tid>/.
 /// Never writes or commits to NAND. Returns true if enumeration succeeded.
 bool hbCopyNandSavesToSd(char* summary, size_t summary_size);
+
+/// Clears all cached RomFS metadata slots in nupvfs.nso (NupVfsCmd_ClearCache).
+bool hbClearRomfsCache(char* summary, size_t summary_size);
+
+/// Scans sdmc:/kaihen/mods/<tid>/packs/<name> for toggleable mod packs.
+int hbModPacksLoad(HbModPackList* out);
+
+/// Toggles a mod pack by creating/removing <pack_dir>/.disabled and clears nupvfs cache.
+bool hbModPackToggle(HbModPackEntry* pack);
