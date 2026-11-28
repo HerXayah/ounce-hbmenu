@@ -10,6 +10,7 @@
 
 #define HB_PLUGIN_MAX 16
 #define HB_PLUGIN_OPTION_MAX 9
+#define HB_PLUGIN_KEY_COPY_SAVES "__copy_nand_saves"
 
 typedef struct {
     char name[HEN_PLUGIN_NAME_SIZE];      /* display name (GetInfo, may be a label) */
@@ -36,3 +37,7 @@ bool hbPluginSettingsSet(const HbPluginSettings* plugin, const char* key,
 /// Queries a single Bool option from a registered plugin (e.g. "nupvfs", "games").
 /// Falls back to /kaihen/<reg_name>.cfg if HEN is unavailable, else default_val.
 bool hbPluginGetBool(const char* reg_name, const char* key, bool default_val);
+
+/// Read-only copies matching console NAND saves to sdmc:/kaihen/saves/<tid>/.
+/// Never writes or commits to NAND. Returns true if enumeration succeeded.
+bool hbCopyNandSavesToSd(char* summary, size_t summary_size);

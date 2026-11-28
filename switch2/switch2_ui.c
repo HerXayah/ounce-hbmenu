@@ -1745,12 +1745,27 @@ static void drawAppTile(menuEntry_s *me, float x, float y, float w, float h,
                                (uint8_t)((110.0f + 145.0f * t) * dim / 255.0f)), action);
             /* Disc/cartridge logo: full strip height with a few px padding (PS4 style) */
             const float disc_sz = label_h - 6.0f;
-            if (disc_sz > 4.0f)
-                renderImageScaledF(g_ps4_disc_icon_rgba, g_ps4_disc_icon_rgba_W,
-                                  g_ps4_disc_icon_rgba_H, x + w - disc_sz - 8.0f,
-                                  y + h - label_h + 3.0f, disc_sz, disc_sz,
-                                  RenderImageFormat_Rgba32,
-                                  ((uint32_t)((110.0f + 145.0f * t) * dim / 255.0f) << 24) | 0x00ffffffu);
+            if (disc_sz > 4.0f) {
+                const uint8_t alpha = (uint8_t)((110.0f + 145.0f * t) * dim / 255.0f);
+                const float dx_i = x + w - disc_sz - 8.0f;
+                const float dy_i = y + h - label_h + 3.0f;
+                if (me->game_platform == 2) {
+                    renderImageScaledF(g_ps4_disc_icon_rgba, g_ps4_disc_icon_rgba_W,
+                                       g_ps4_disc_icon_rgba_H, dx_i, dy_i, disc_sz, disc_sz,
+                                       RenderImageFormat_Rgba32, makeRGBA(230, 0, 18, alpha));
+                } else if (me->game_platform == 1) {
+                    renderRoundedRectF(dx_i + 1.0f, dy_i + 1.0f, disc_sz - 2.0f, disc_sz - 2.0f,
+                                       4.0f, makeRGBA(155, 160, 170, alpha));
+                    renderImageScaledF(g_ps4_disc_icon_rgba, g_ps4_disc_icon_rgba_W,
+                                       g_ps4_disc_icon_rgba_H, dx_i, dy_i, disc_sz, disc_sz,
+                                       RenderImageFormat_Rgba32, makeRGBA(18, 20, 24, alpha));
+                } else {
+                    renderImageScaledF(g_ps4_disc_icon_rgba, g_ps4_disc_icon_rgba_W,
+                                       g_ps4_disc_icon_rgba_H, dx_i, dy_i, disc_sz, disc_sz,
+                                       RenderImageFormat_Rgba32,
+                                       ((uint32_t)alpha << 24) | 0x00ffffffu);
+                }
+            }
         }
 
         if (me->starred && me->type != ENTRY_TYPE_THEME)
@@ -1888,9 +1903,21 @@ static void drawFocusedHeaderInfo(menuEntry_s *me, float center_x, float title_y
         cur_x += 24.0f;
     }
     if (show_cart) {
-        uint32_t c_col = title_col.abgr | 0xff000000u;
-        renderRoundedRectF(cur_x, title_y - 16.0f, 14.0f, 18.0f, 3.0f, c_col);
-        renderRectF(cur_x + 3.5f, title_y - 4.0f, 7.0f, 2.0f, dark ? makeRGBA(24, 24, 26, 255) : makeRGBA(235, 235, 238, 255));
+        if (me->game_platform == 2) {
+            /* Switch 2 game card: red */
+            renderRoundedRectF(cur_x, title_y - 16.0f, 14.0f, 18.0f, 3.0f, makeRGBA(230, 0, 18, 255));
+            renderRectF(cur_x + 3.5f, title_y - 4.0f, 7.0f, 2.0f, makeRGBA(255, 232, 234, 255));
+        } else if (me->game_platform == 1) {
+            /* Switch 1 game card: black (with subtle rim so it stays crisp on dark themes) */
+            renderRoundedRectF(cur_x - 1.0f, title_y - 17.0f, 16.0f, 20.0f, 3.5f,
+                               dark ? makeRGBA(145, 150, 162, 255) : makeRGBA(80, 84, 92, 255));
+            renderRoundedRectF(cur_x, title_y - 16.0f, 14.0f, 18.0f, 3.0f, makeRGBA(18, 20, 24, 255));
+            renderRectF(cur_x + 3.5f, title_y - 4.0f, 7.0f, 2.0f, makeRGBA(180, 185, 196, 255));
+        } else {
+            uint32_t c_col = title_col.abgr | 0xff000000u;
+            renderRoundedRectF(cur_x, title_y - 16.0f, 14.0f, 18.0f, 3.0f, c_col);
+            renderRectF(cur_x + 3.5f, title_y - 4.0f, 7.0f, 2.0f, dark ? makeRGBA(24, 24, 26, 255) : makeRGBA(235, 235, 238, 255));
+        }
         cur_x += 22.0f;
     }
 
@@ -9222,6 +9249,16 @@ static void changePluginSetting(int delta) {
     if (s_plugin_option_sel < 0 || s_plugin_option_sel >= plugin->option_count)
         return;
     KaihenPluginSetting *option = &plugin->options[s_plugin_option_sel];
+    if (strcmp(plugin->reg_name, "nupvfs") == 0 &&
+        strcmp(option->key, HB_PLUGIN_KEY_COPY_SAVES) == 0) {
+        if (delta <= 0)
+            return;
+        char summary[320];
+        bool ok = hbCopyNandSavesToSd(summary, sizeof summary);
+        switch2SfxPlay(ok ? S2Sfx_Confirm : S2Sfx_Back);
+        menuCreateMsgBox(660, 280, summary);
+        return;
+    }
     int value = option->value + delta * (option->step ? option->step : 1);
     if (option->type == KaihenPluginSetting_Bool) {
         /* A / arrows flip a Bool instead of forcing a direction, so
@@ -9247,6 +9284,8 @@ static void changePluginSetting(int delta) {
 
 static const char *pluginOptionValue(const KaihenPluginSetting *option, char *buf,
                                      size_t buf_size) {
+    if (strcmp(option->key, HB_PLUGIN_KEY_COPY_SAVES) == 0)
+        return "Run";
     if (option->type == KaihenPluginSetting_Bool)
         return option->value ? "On" : "Off";
     snprintf(buf, buf_size, "%u", option->value);
@@ -9486,7 +9525,9 @@ static void drawSettingsView(void) {
                 char valueBuf[32];
                 const char *value = pluginOptionValue(option, valueBuf, sizeof(valueBuf));
                 char valBuf[64];
-                if (focused)
+                if (strcmp(option->key, HB_PLUGIN_KEY_COPY_SAVES) == 0)
+                    snprintf(valBuf, sizeof(valBuf), focused ? "[A] %s" : "%s", value);
+                else if (focused)
                     snprintf(valBuf, sizeof(valBuf), "\u25C2  %s  \u25B8", value);
                 else
                     snprintf(valBuf, sizeof(valBuf), "%s", value);

@@ -80,6 +80,7 @@ struct menuEntry_s_tag
     ImageMode icon_mode; // pixel format of icon_gfx and icon_gfx_small
 
     bool starred;
+    uint8_t game_platform; // 0=homebrew, 1=Switch 1 game, 2=Switch 2 game
 
     NacpStruct *nacp;
 };

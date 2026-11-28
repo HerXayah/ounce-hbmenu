@@ -43,6 +43,34 @@ extern u32 __nx_applet_exit_mode;
 
 int main(int argc, char **argv)
 {
+    /* Fast-path Auto-Donor Pivot handoff: only chain when /kaihen/autolaunch.txt
+       starts with "once:" so stale or unrelated files never hijack HBMenu. */
+    if (envHasNextLoad() && fileExists("sdmc:/kaihen/autolaunch.txt")) {
+        char head[8] = {0};
+        FILE *af = fopen("sdmc:/kaihen/autolaunch.txt", "rb");
+        if (af) {
+            fread(head, 1, 5, af);
+            fclose(af);
+        }
+        if (strncmp(head, "once:", 5) == 0) {
+            static const char* const loaders[] = {
+                "sdmc:/switch/nup-loader/nup-loader.nro",
+                "sdmc:/switch/nup-loader.nro",
+                "sdmc:/kaihen/programs/nup-loader.nro",
+                "sdmc:/nup-loader.nro",
+            };
+            for (size_t i = 0; i < sizeof(loaders) / sizeof(loaders[0]); i++) {
+                if (fileExists(loaders[i])) {
+                    char arg[256];
+                    snprintf(arg, sizeof(arg), "\"%s\"", loaders[i]);
+                    if (R_SUCCEEDED(envSetNextLoad(loaders[i], arg)))
+                        return 0;
+                    break;
+                }
+            }
+        }
+    }
+
     bool error_screen=0;
     Result lastret=0;
     Result rc=0;

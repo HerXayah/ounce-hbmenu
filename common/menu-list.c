@@ -268,6 +268,7 @@ static bool findGameLoaderNro(char* out, size_t out_sz) {
     static const char* const candidates[] = {
         "sdmc:/switch/nup-loader/nup-loader.nro",
         "sdmc:/switch/nup-loader.nro",
+        "sdmc:/kaihen/programs/nup-loader.nro",
         "sdmc:/nup-loader.nro",
     };
     for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {

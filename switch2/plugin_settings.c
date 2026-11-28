@@ -1,8 +1,12 @@
 /* SPDX-License-Identifier: ISC
  * kaiHEN plugin settings exposed by the Settings menu.
  */
+#include <dirent.h>
+#include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <kaihen.h>
 
 #include "plugin_settings.h"
@@ -86,6 +90,16 @@ int hbPluginSettingsLoad(HbPluginSettingsList* out) {
             entry->options[entry->option_count++] = setting;
         }
         serviceClose(&plugin);
+
+        if (strcmp(entry->reg_name, "nupvfs") == 0 &&
+            entry->option_count < HB_PLUGIN_OPTION_MAX) {
+            KaihenPluginSetting action;
+            memset(&action, 0, sizeof(action));
+            copyName(action.key, sizeof(action.key), HB_PLUGIN_KEY_COPY_SAVES);
+            copyName(action.label, sizeof(action.label), "Copy NAND Saves -> SD");
+            action.type = KaihenPluginSetting_Bool;
+            entry->options[entry->option_count++] = action;
+        }
 
         if (entry->option_count > 0)
             out->count++;
@@ -201,4 +215,273 @@ bool hbPluginGetBool(const char* reg_name, const char* key, bool default_val) {
     if (readCfgBoolFallback(reg_name, key, &cfg_val))
         return cfg_val;
     return default_val;
+}
+
+static void mkdirRecursiveSd(const char* path) {
+    char tmp[512];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    size_t len = strlen(tmp);
+    while (len > 1 && tmp[len - 1] == '/')
+        tmp[--len] = '\0';
+    for (char* p = tmp + 6; *p; p++) { // skip "sdmc:/"
+        if (*p == '/') {
+            *p = '\0';
+            mkdir(tmp, 0777);
+            *p = '/';
+        }
+    }
+    mkdir(tmp, 0777);
+}
+
+static bool readNpdmProgramId(const char* npdm_path, u64* out_tid) {
+    FILE* f = fopen(npdm_path, "rb");
+    if (!f) return false;
+    u8 hdr[0x80];
+    if (fread(hdr, 1, sizeof(hdr), f) != sizeof(hdr)) {
+        fclose(f);
+        return false;
+    }
+    if (memcmp(hdr, "META", 4) != 0) {
+        fclose(f);
+        return false;
+    }
+    u32 aci0_off = 0, aci0_sz = 0;
+    memcpy(&aci0_off, hdr + 0x70, 4);
+    memcpy(&aci0_sz, hdr + 0x74, 4);
+    if (aci0_sz < 0x18 || fseek(f, (long)aci0_off, SEEK_SET) != 0) {
+        fclose(f);
+        return false;
+    }
+    u8 aci0[0x18];
+    if (fread(aci0, 1, sizeof(aci0), f) != sizeof(aci0) || memcmp(aci0, "ACI0", 4) != 0) {
+        fclose(f);
+        return false;
+    }
+    u64 tid = 0;
+    memcpy(&tid, aci0 + 0x10, 8);
+    fclose(f);
+    if (!tid) return false;
+    *out_tid = tid;
+    return true;
+}
+
+static void addUniqueTid(u64* tids, size_t* count, size_t max_tids, u64 tid) {
+    if (!tid || *count >= max_tids) return;
+    for (size_t i = 0; i < *count; i++) {
+        if (tids[i] == tid) return;
+    }
+    tids[(*count)++] = tid;
+}
+
+static size_t scanBackupTids(u64* tids, size_t max_tids) {
+    static const char* const roots[] = {
+        "sdmc:/backups",
+        "sdmc:/games",
+        "sdmc:/switch/games",
+        "sdmc:/nup",
+        "sdmc:/roms",
+    };
+    static const char* const npdm_rel[] = {
+        "exefs/main.npdm",
+        "game/exefs/main.npdm",
+        "program1/exefs/main.npdm",
+        "game/program1/exefs/main.npdm",
+    };
+    size_t count = 0;
+    for (size_t r = 0; r < sizeof(roots) / sizeof(roots[0]); r++) {
+        DIR* d = opendir(roots[r]);
+        if (!d) continue;
+        struct dirent* ent;
+        while ((ent = readdir(d)) != NULL) {
+            if (ent->d_name[0] == '.') continue;
+            for (size_t p = 0; p < sizeof(npdm_rel) / sizeof(npdm_rel[0]); p++) {
+                char path[512];
+                snprintf(path, sizeof(path), "%s/%s/%s", roots[r], ent->d_name, npdm_rel[p]);
+                u64 tid = 0;
+                if (readNpdmProgramId(path, &tid))
+                    addUniqueTid(tids, &count, max_tids, tid);
+            }
+        }
+        closedir(d);
+    }
+    return count;
+}
+
+typedef struct {
+    u8* buf;
+    size_t buf_sz;
+    u32 files_copied;
+    u32 errors;
+    u64 bytes_copied;
+} SaveCopyStats;
+
+static void copyFsDirToSd(FsFileSystem* src_fs, const char* src_dir,
+                          const char* dst_dir, SaveCopyStats* st, int depth) {
+    if (depth > 16) return;
+    mkdirRecursiveSd(dst_dir);
+
+    FsDir dir;
+    if (R_FAILED(fsFsOpenDirectory(src_fs, src_dir,
+                                   FsDirOpenMode_ReadDirs | FsDirOpenMode_ReadFiles, &dir))) {
+        st->errors++;
+        return;
+    }
+
+    FsDirectoryEntry entries[32];
+    s64 read_cnt = 0;
+    while (R_SUCCEEDED(fsDirRead(&dir, &read_cnt, 32, entries)) && read_cnt > 0) {
+        for (s64 i = 0; i < read_cnt; i++) {
+            const char* name = entries[i].name;
+            if (!name[0] || strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+                continue;
+            char child_src[FS_MAX_PATH];
+            char child_dst[512];
+            if (strcmp(src_dir, "/") == 0)
+                snprintf(child_src, sizeof(child_src), "/%s", name);
+            else
+                snprintf(child_src, sizeof(child_src), "%s/%s", src_dir, name);
+            snprintf(child_dst, sizeof(child_dst), "%s/%s", dst_dir, name);
+
+            if (entries[i].type == FsDirEntryType_Dir) {
+                copyFsDirToSd(src_fs, child_src, child_dst, st, depth + 1);
+            } else if (entries[i].type == FsDirEntryType_File) {
+                FsFile f;
+                if (R_FAILED(fsFsOpenFile(src_fs, child_src, FsOpenMode_Read, &f))) {
+                    st->errors++;
+                    continue;
+                }
+                s64 fsz = 0;
+                if (R_FAILED(fsFileGetSize(&f, &fsz)) || fsz < 0) {
+                    fsFileClose(&f);
+                    st->errors++;
+                    continue;
+                }
+                FILE* out = fopen(child_dst, "wb");
+                if (!out) {
+                    fsFileClose(&f);
+                    st->errors++;
+                    continue;
+                }
+                s64 off = 0;
+                bool ok = true;
+                while (off < fsz) {
+                    u64 chunk = (u64)(fsz - off);
+                    if (chunk > st->buf_sz) chunk = st->buf_sz;
+                    u64 got = 0;
+                    if (R_FAILED(fsFileRead(&f, off, st->buf, chunk, FsReadOption_None, &got)) ||
+                        got == 0 || fwrite(st->buf, 1, (size_t)got, out) != (size_t)got) {
+                        ok = false;
+                        break;
+                    }
+                    off += (s64)got;
+                    st->bytes_copied += got;
+                }
+                fclose(out);
+                fsFileClose(&f);
+                if (ok) st->files_copied++;
+                else st->errors++;
+            }
+        }
+    }
+    fsDirClose(&dir);
+}
+
+bool hbCopyNandSavesToSd(char* summary, size_t summary_size) {
+    u64 backup_tids[128];
+    const size_t backup_count = scanBackupTids(backup_tids, 128);
+    if (backup_count == 0) {
+        snprintf(summary, summary_size,
+                 "Copy NAND Saves -> SD\nNo game backups found in /backups.");
+        return false;
+    }
+
+    AccountUid active_uid = {0};
+    bool has_active_uid = false;
+    if (R_SUCCEEDED(accountInitialize(AccountServiceType_Application))) {
+        if (R_SUCCEEDED(accountGetPreselectedUser(&active_uid)) && accountUidIsValid(&active_uid))
+            has_active_uid = true;
+        accountExit();
+    }
+
+    FsSaveDataInfoReader reader;
+    Result rc = fsOpenSaveDataInfoReader(&reader, FsSaveDataSpaceId_User);
+    if (R_FAILED(rc)) {
+        snprintf(summary, summary_size,
+                 "Copy NAND Saves -> SD failed\nfsOpenSaveDataInfoReader: 0x%x", rc);
+        return false;
+    }
+
+    SaveCopyStats st;
+    memset(&st, 0, sizeof(st));
+    st.buf_sz = 128 * 1024;
+    st.buf = (u8*)malloc(st.buf_sz);
+    if (!st.buf) {
+        fsSaveDataInfoReaderClose(&reader);
+        snprintf(summary, summary_size, "Copy NAND Saves -> SD failed\nOut of memory");
+        return false;
+    }
+
+    u32 titles_copied = 0;
+    FsSaveDataInfo infos[64];
+    s64 total = 0;
+    while (R_SUCCEEDED(fsSaveDataInfoReaderRead(&reader, infos, 64, &total)) && total > 0) {
+        for (s64 i = 0; i < total; i++) {
+            const FsSaveDataInfo* info = &infos[i];
+            if (!info->application_id) continue;
+            if (info->save_data_type != FsSaveDataType_Account &&
+                info->save_data_type != FsSaveDataType_Device)
+                continue;
+            if (info->save_data_type == FsSaveDataType_Account && has_active_uid &&
+                memcmp(&info->uid, &active_uid, sizeof(AccountUid)) != 0)
+                continue;
+
+            const u64 info_base = info->application_id & 0x00fffffffffff000ULL;
+            u64 matched_tids[4];
+            size_t matched_cnt = 0;
+            for (size_t b = 0; b < backup_count && matched_cnt < 4; b++) {
+                if (backup_tids[b] == info->application_id ||
+                    (backup_tids[b] & 0x00fffffffffff000ULL) == info_base) {
+                    matched_tids[matched_cnt++] = backup_tids[b];
+                }
+            }
+            if (matched_cnt == 0) continue;
+
+            FsSaveDataAttribute attr;
+            memset(&attr, 0, sizeof(attr));
+            attr.application_id = info->application_id;
+            attr.uid = info->uid;
+            attr.save_data_type = info->save_data_type;
+            attr.save_data_rank = info->save_data_rank;
+            attr.save_data_index = info->save_data_index;
+
+            FsFileSystem save_fs;
+            // Strictly read-only NAND open (FS cmd 53); never writes or commits to NAND.
+            if (R_FAILED(fsOpenReadOnlySaveDataFileSystem(&save_fs, FsSaveDataSpaceId_User, &attr))) {
+                st.errors++;
+                continue;
+            }
+
+            const char* sub = (info->save_data_type == FsSaveDataType_Device) ? "device" : "user";
+            for (size_t m = 0; m < matched_cnt; m++) {
+                char dst[256];
+                snprintf(dst, sizeof(dst), "sdmc:/kaihen/saves/%016llx/%s",
+                         (unsigned long long)matched_tids[m], sub);
+                copyFsDirToSd(&save_fs, "/", dst, &st, 0);
+                titles_copied++;
+            }
+            fsFsClose(&save_fs);
+        }
+    }
+
+    fsSaveDataInfoReaderClose(&reader);
+    free(st.buf);
+
+    snprintf(summary, summary_size,
+             "NAND Saves -> SD (/kaihen/saves/)\n"
+             "Copied: %u target(s), %u file(s), %.2f MiB\n"
+             "Backups scanned: %zu  Errors: %u",
+             titles_copied, st.files_copied,
+             (double)st.bytes_copied / (1024.0 * 1024.0),
+             backup_count, st.errors);
+    return true;
 }

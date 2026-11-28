@@ -324,6 +324,33 @@ static bool menuEntryFindDirNacp(const char* dir_path, char* out, size_t out_sz)
     return false;
 }
 
+static uint8_t detectGamePlatformFromDir(const char* game_dir) {
+    static const char* const rels[] = { "exefs/main.npdm", "game/exefs/main.npdm" };
+    for (size_t i = 0; i < sizeof(rels) / sizeof(rels[0]); i++) {
+        char path[PATH_MAX + 32];
+        snprintf(path, sizeof(path), "%s/%s", game_dir, rels[i]);
+        FILE* f = fopen(path, "rb");
+        if (!f) continue;
+        uint8_t hdr[0x80];
+        if (fread(hdr, 1, sizeof(hdr), f) == sizeof(hdr) && memcmp(hdr, "META", 4) == 0) {
+            uint32_t aci0_off = 0, aci0_sz = 0;
+            memcpy(&aci0_off, hdr + 0x70, 4);
+            memcpy(&aci0_sz, hdr + 0x74, 4);
+            if (aci0_sz >= 0x18 && fseek(f, (long)aci0_off, SEEK_SET) == 0) {
+                uint8_t aci0[0x18];
+                if (fread(aci0, 1, sizeof(aci0), f) == sizeof(aci0) && memcmp(aci0, "ACI0", 4) == 0) {
+                    uint64_t tid = 0;
+                    memcpy(&tid, aci0 + 0x10, 8);
+                    fclose(f);
+                    return ((tid >> 56) == 0x04) ? 2 : 1;
+                }
+            }
+        }
+        fclose(f);
+    }
+    return 1;
+}
+
 bool menuEntryLoadGameShortcut(menuEntry_s* me, const char* name, const char* loader_nro,
                                const char* game_dir, const char* icon_override, bool trace_mode) {
     if (!me || !loader_nro || !game_dir || !fileExists(loader_nro))
@@ -340,6 +367,7 @@ bool menuEntryLoadGameShortcut(menuEntry_s* me, const char* name, const char* lo
     fallback_base = (fallback_base && fallback_base[1]) ? (fallback_base + 1) : game_dir;
 
     snprintf(me->path, sizeof(me->path), "%s", loader_nro);
+    me->game_platform = detectGamePlatformFromDir(game_dir);
     strncpy(me->name, (explicit_name && explicit_name[0]) ? explicit_name : fallback_base, sizeof(me->name) - 1);
     strncpy(me->author, textGetString(StrId_DefaultPublisher), sizeof(me->author) - 1);
     strncpy(me->version, "1.0.0", sizeof(me->version) - 1);
