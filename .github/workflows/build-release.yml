@@ -1,0 +1,119 @@
+# SPDX-License-Identifier: ISC
+# Builds Switch 2 hbmenu.nro using ounce-devkit.
+# Push to main/master updates rolling 'latest' release; tags (v* / YYYYMMDD*) publish versioned releases.
+name: Build & Release
+
+on:
+  push:
+    branches: [main, master]
+    tags:
+      - 'v*'
+      - '[0-9]*'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Switch 2 hbmenu.nro
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Prepare ounce-devkit context (403-resilient)
+        run: |
+          git clone --depth=1 https://github.com/ouncebrew/ounce-devkit.git /tmp/ounce-devkit
+          python3 - <<'PY'
+          p = "/tmp/ounce-devkit/Dockerfile"
+          s = open(p).read()
+          assert "RUN dkp-pacman -Sy --noconfirm devkitA64 &&" in s
+          open(p, "w").write(s.replace("RUN dkp-pacman -Sy --noconfirm devkitA64 &&", "RUN (dkp-pacman -Sy --noconfirm devkitA64 || true) &&"))
+
+          p = "/tmp/ounce-devkit/install.sh"
+          s = open(p).read()
+          old = 'as_root "$PACMAN" -Sy --needed --noconfirm $overwrite $PACKAGES'
+          assert old in s
+          new = old + ' || { awk "/^\\[dkp-/{skip=1;next} /^\\[/{skip=0} !skip" "$PACMAN_CONF" > /tmp/ounce-only.conf && as_root "$PACMAN" --config /tmp/ounce-only.conf -Sy --needed --noconfirm $overwrite $PACKAGES; }'
+          open(p, "w").write(s.replace(old, new))
+          PY
+
+      - name: Build ounce-devkit image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: /tmp/ounce-devkit
+          tags: ounce-devkit:latest
+          load: true
+          cache-from: type=gha,scope=ounce-devkit
+          cache-to: type=gha,mode=max,scope=ounce-devkit
+
+      - name: Build hbmenu.nro
+        run: |
+          git clone --depth=1 https://github.com/Doofenshmirtz-Homebrew-Incorporated/okaihen.git /tmp/okaihen
+          docker run --rm -v "$PWD:/src" -v "/tmp/okaihen:/okaihen" -w /src ounce-devkit bash -euo pipefail -c '
+            make -C /okaihen/libkaihen -j"$(nproc)"
+            cp -r /okaihen/libkaihen/include/* /opt/devkitpro/portlibs/switch2/include/
+            cp /okaihen/libkaihen/build/libkaihen.a /okaihen/libkaihen/build/libkaihen_plugin.a /opt/devkitpro/portlibs/switch2/lib/
+            make -j"$(nproc)" -f switch2/Makefile
+          '
+          mkdir -p out
+          cp build/nro/nro/hbmenu.nro out/hbmenu.nro
+
+      - name: Package release bundle
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="latest"
+          fi
+          mkdir -p dist
+          cp out/hbmenu.nro dist/hbmenu.nro
+          (cd out && zip -q -r -X "../dist/ounce-hbmenu-${version}.zip" hbmenu.nro)
+          (cd dist && sha256sum "ounce-hbmenu-${version}.zip" hbmenu.nro > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+          echo "VERSION=${version}" >> "$GITHUB_ENV"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ounce-hbmenu-${{ env.VERSION }}-${{ github.sha }}
+          path: dist/
+
+      - name: Publish GitHub Release (tag or rolling latest)
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "ounce-hbmenu ${GITHUB_REF_NAME}" \
+              --generate-notes \
+              "dist/ounce-hbmenu-${VERSION}.zip" \
+              dist/hbmenu.nro \
+              dist/SHA256SUMS.txt
+          else
+            if gh release view latest >/dev/null 2>&1; then
+              gh release upload latest --clobber \
+                "dist/ounce-hbmenu-${VERSION}.zip" \
+                dist/hbmenu.nro \
+                dist/SHA256SUMS.txt
+              gh release edit latest \
+                --title "ounce-hbmenu latest (${GITHUB_SHA::7})" \
+                --notes "Rolling build from commit ${GITHUB_SHA}."
+            else
+              gh release create latest \
+                --prerelease \
+                --title "ounce-hbmenu latest (${GITHUB_SHA::7})" \
+                --notes "Rolling build from commit ${GITHUB_SHA}." \
+                "dist/ounce-hbmenu-${VERSION}.zip" \
+                dist/hbmenu.nro \
+                dist/SHA256SUMS.txt
+            fi
+          fi

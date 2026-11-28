@@ -9976,20 +9976,42 @@ static void drawPS4LaunchOverlay(void) {
     }
 }
 
-static void triggerEntryLaunch(menuEntry_s *me) {
+static void triggerEntryLaunchConfirmed(void *arg) {
+    menuEntry_s *me = (menuEntry_s *)arg;
     if (!me) return;
-    if (me->type == ENTRY_TYPE_FILE && s_cfg.ui_style == 1 && s_cfg.transitions != 2) {
+    if (s_cfg.ui_style == 1) {
         switch2SfxPlay(S2Sfx_Launch);
         s_ps4_launch_active = true;
         s_ps4_launch_ms = 0.0f;
         s_ps4_launch_entry = me;
-        homeTileRect(s_sel, &s_ps4_launch_sx, &s_ps4_launch_sy, &s_ps4_launch_sw, &s_ps4_launch_sh);
-        /* Icon inside the PS4 tile is square (w x w); exclude bottom Start strip so it never stretches */
-        if (s_ps4_launch_sh > s_ps4_launch_sw)
-            s_ps4_launch_sh = s_ps4_launch_sw;
+        if (s_view == S2View_Grid) {
+            s_ps4_launch_sw = s_ps4_launch_sh = 256.0f;
+            s_ps4_launch_sx = (SCREEN_W - 256.0f) * 0.5f;
+            s_ps4_launch_sy = (SCREEN_H - 256.0f) * 0.5f;
+        } else {
+            homeTileRect(s_sel, &s_ps4_launch_sx, &s_ps4_launch_sy, &s_ps4_launch_sw, &s_ps4_launch_sh);
+            if (s_ps4_launch_sh > s_ps4_launch_sw)
+                s_ps4_launch_sh = s_ps4_launch_sw;
+        }
         return;
     }
-    switch2SfxPlay(me->type == ENTRY_TYPE_FILE ? S2Sfx_Launch : S2Sfx_Confirm);
+    launchMenuEntry(me);
+}
+
+static void triggerEntryLaunch(menuEntry_s *me) {
+    if (!me) return;
+    const bool is_launchable = (me->type != ENTRY_TYPE_FOLDER && me->type != ENTRY_TYPE_THEME);
+    if (is_launchable && s_cfg.ui_style == 1) {
+        if (launchMenuEntryNeedsPlatformWarning(me)) {
+            switch2SfxPlay(S2Sfx_DialogOpen);
+            menuCreateConfirmMsgBox(780, 300, textGetString(StrId_Switch1Warning),
+                                    triggerEntryLaunchConfirmed, me);
+            return;
+        }
+        triggerEntryLaunchConfirmed(me);
+        return;
+    }
+    switch2SfxPlay(is_launchable ? S2Sfx_Launch : S2Sfx_Confirm);
     launchMenuEntryTask(me);
     syncSelectionFromMenu(menuGetCurrent());
 }
@@ -10074,8 +10096,9 @@ bool switch2MenuUpdate(u64 down) {
         if (s_ps4_launch_ms >= 1500.0f && s_ps4_launch_entry) {
             menuEntry_s *target = s_ps4_launch_entry;
             s_ps4_launch_active = false;
+            s_ps4_launch_ms = 0.0f;
             s_ps4_launch_entry = NULL;
-            launchMenuEntryTask(target);
+            launchMenuEntry(target);
             syncSelectionFromMenu(menuGetCurrent());
         }
         return false;
