@@ -45,4 +45,6 @@ u8 *assetsGetDataBuffer(AssetId id);
 
 bool assetsLoadJpgFromMemory(u8 *indata, size_t indata_size, u8 *outdata, ImageMode imageMode, size_t width, size_t height);
 bool assetsLoadPngFromMemory(u8 *indata, size_t indata_size, u8 *outdata, ImageMode imageMode, size_t width, size_t height);
+bool assetsLoadJpgFromMemoryAny(u8 *indata, size_t indata_size, u8 **outdata, ImageMode imageMode, int *out_w, int *out_h);
+bool assetsLoadPngFromMemoryAny(u8 *indata, size_t indata_size, u8 **outdata, ImageMode imageMode, int *out_w, int *out_h);
 

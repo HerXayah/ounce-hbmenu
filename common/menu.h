@@ -94,6 +94,8 @@ void menuEntryInit(menuEntry_s* me, MenuEntryType type);
 void menuEntryFree(menuEntry_s* me, bool skip_icongfx);
 bool fileExists(const char* path);
 bool menuEntryLoad(menuEntry_s* me, const char* name, bool shortcut, bool check_exists);
+bool menuEntryLoadGameShortcut(menuEntry_s* me, const char* name, const char* loader_nro,
+                               const char* game_dir, const char* icon_override, bool trace_mode);
 void menuEntryParseIcon(menuEntry_s* me);
 uint8_t *downscaleImg(const uint8_t *image, int srcWidth, int srcHeight, int destWidth, int destHeight, ImageMode mode);
 void menuEntryParseNacp(menuEntry_s* me);

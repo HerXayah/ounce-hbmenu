@@ -29,5 +29,10 @@ typedef struct {
 int hbPluginSettingsLoad(HbPluginSettingsList* out);
 
 /// Applies one value through the plugin's service. Returns true on success.
+/// On failure, writes the failing stage and Result into err (if non-NULL).
 bool hbPluginSettingsSet(const HbPluginSettings* plugin, const char* key,
-                         uint8_t value);
+                         uint8_t value, char *err, size_t err_size);
+
+/// Queries a single Bool option from a registered plugin (e.g. "nupvfs", "games").
+/// Falls back to /kaihen/<reg_name>.cfg if HEN is unavailable, else default_val.
+bool hbPluginGetBool(const char* reg_name, const char* key, bool default_val);

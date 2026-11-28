@@ -9231,11 +9231,17 @@ static void changePluginSetting(int delta) {
         if (value < option->min) value = option->min;
         if (value > option->max) value = option->max;
     }
-    if (hbPluginSettingsSet(plugin, option->key, (uint8_t)value)) {
+    char err[96];
+    if (hbPluginSettingsSet(plugin, option->key, (uint8_t)value, err, sizeof err)) {
         option->value = (uint8_t)value;
+        if (strcmp(plugin->reg_name, "nupvfs") == 0 && strcmp(option->key, "games") == 0)
+            s_folders_dirty = true;
         switch2SfxPlay(S2Sfx_Confirm);
     } else {
         switch2SfxPlay(S2Sfx_Back);
+        char text[256];
+        snprintf(text, sizeof text, "Plugin set failed\n%s", err[0] ? err : "unknown");
+        menuCreateMsgBox(560, 260, text);
     }
 }
 
