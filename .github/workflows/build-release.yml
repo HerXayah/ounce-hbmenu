@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: ISC
 # Builds Switch 2 hbmenu.nro using ounce-devkit.
-# Push to main/master updates rolling 'latest' release; tags (v* / YYYYMMDD*) publish versioned releases.
+# Push to main/master publishes a commit-tagged release; tags (v* / YYYYMMDD*) publish versioned releases.
 name: Build & Release
 
 on:
@@ -18,6 +18,8 @@ permissions:
 jobs:
   build:
     name: Build Switch 2 hbmenu.nro
+    # This workflow publishes 40-character commit-SHA tags; skip those tag events.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || length(github.ref_name) != 40
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -71,7 +73,7 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             version="${GITHUB_REF_NAME}"
           else
-            version="latest"
+            version="${GITHUB_SHA}"
           fi
           mkdir -p dist
           cp out/hbmenu.nro dist/hbmenu.nro
@@ -86,7 +88,7 @@ jobs:
           name: ounce-hbmenu-${{ env.VERSION }}-${{ github.sha }}
           path: dist/
 
-      - name: Publish GitHub Release (tag or rolling latest)
+      - name: Publish GitHub Release (version tag or commit)
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -99,21 +101,20 @@ jobs:
               dist/hbmenu.nro \
               dist/SHA256SUMS.txt
           else
-            if gh release view latest >/dev/null 2>&1; then
-              gh release upload latest --clobber \
-                "dist/ounce-hbmenu-${VERSION}.zip" \
-                dist/hbmenu.nro \
-                dist/SHA256SUMS.txt
-              gh release edit latest \
-                --title "ounce-hbmenu latest (${GITHUB_SHA::7})" \
-                --notes "Rolling build from commit ${GITHUB_SHA}."
+            tag="$GITHUB_SHA"
+            zip="dist/ounce-hbmenu-${VERSION}.zip"
+            if gh release view "$tag" >/dev/null 2>&1; then
+              gh release upload "$tag" --clobber \
+                "$zip" dist/hbmenu.nro dist/SHA256SUMS.txt
+              gh release edit "$tag" \
+                --title "ounce-hbmenu ${GITHUB_SHA::7}" \
+                --notes "Build from commit ${GITHUB_SHA}."
             else
-              gh release create latest \
+              gh release create "$tag" \
+                --target "$GITHUB_SHA" \
                 --prerelease \
-                --title "ounce-hbmenu latest (${GITHUB_SHA::7})" \
-                --notes "Rolling build from commit ${GITHUB_SHA}." \
-                "dist/ounce-hbmenu-${VERSION}.zip" \
-                dist/hbmenu.nro \
-                dist/SHA256SUMS.txt
+                --title "ounce-hbmenu ${GITHUB_SHA::7}" \
+                --notes "Build from commit ${GITHUB_SHA}." \
+                "$zip" dist/hbmenu.nro dist/SHA256SUMS.txt
             fi
           fi
