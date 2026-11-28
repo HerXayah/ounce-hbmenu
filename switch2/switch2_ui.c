@@ -106,7 +106,39 @@ static int s_prev_focus = 0;   /* S2FocusMode at settings entry */
 static int s_prev_top_idx = 0;
 static S2ViewMode s_last_view = S2View_Carousel;
 static float s_trans_t = 1.0f;
+static float s_ps4_boot_ms = 5000.0f;
+static bool s_ps4_boot_chime_played = true;
+static bool s_ps4_launch_active = false;
+static float s_ps4_launch_ms = 0.0f;
+static float s_ps4_launch_sx = 0.0f, s_ps4_launch_sy = 0.0f, s_ps4_launch_sw = 256.0f, s_ps4_launch_sh = 256.0f;
+static menuEntry_s *s_ps4_launch_entry = NULL;
 static int s_settings_sel = 0;
+
+/* Exact cubic-bezier evaluator (zero bounce, zero overshoot) */
+static float cubicBezierEval(float x1, float y1, float x2, float y2, float x) {
+    if (x <= 0.0f) return 0.0f;
+    if (x >= 1.0f) return 1.0f;
+    float u = x;
+    for (int it = 0; it < 6; it++) {
+        float iu = 1.0f - u;
+        float bx = 3.0f * iu * iu * u * x1 + 3.0f * iu * u * u * x2 + u * u * u;
+        float dx = 3.0f * iu * iu * x1 + 6.0f * iu * u * (x2 - x1) + 3.0f * u * u * (1.0f - x2);
+        if (fabsf(dx) < 1e-5f) break;
+        u -= (bx - x) / dx;
+        if (u < 0.0f) u = 0.0f;
+        if (u > 1.0f) u = 1.0f;
+    }
+    float iu = 1.0f - u;
+    return 3.0f * iu * iu * u * y1 + 3.0f * iu * u * u * y2 + u * u * u;
+}
+static float easeSoft(float t)    { return cubicBezierEval(0.4f, 0.0f, 0.2f, 1.0f, t); }
+static float easeOutSoft(float t) { return cubicBezierEval(0.0f, 0.0f, 0.2f, 1.0f, t); }
+static float easeInSoft(float t)  { return cubicBezierEval(0.4f, 0.0f, 1.0f, 1.0f, t); }
+static float segProg(float ms, float a, float b) {
+    if (ms <= a) return 0.0f;
+    if (ms >= b) return 1.0f;
+    return (ms - a) / (b - a);
+}
 
 static float transSlideOffset(void);
 static void triggerTransition(void);
@@ -341,7 +373,7 @@ void switch2UiInit(ThemePreset system_preset) {
         if (!s_cfg.ps4_sounds_on)
             switch2SfxResetSynth(); /* cues off: built-in ticks, music stays */
         switch2SfxSetBgmEnabled(s_cfg.bgm_on != 0);
-        if (s_cfg.ps4_sounds_on)
+        if (s_cfg.ps4_sounds_on && (s_cfg.ui_style != 1 || s_cfg.transitions == 2))
             switch2SfxPlay(S2Sfx_Startup);
         /* On-device audio diagnostic, visible in Settings -> Themes */
         if (switch2SfxBgmActive())
@@ -355,6 +387,16 @@ void switch2UiInit(ThemePreset system_preset) {
     }
     s_last_view = s_view;
     s_trans_t = 1.0f;
+    if (s_cfg.ui_style == 1 && s_cfg.transitions != 2) {
+        s_ps4_boot_ms = 0.0f;
+        s_ps4_boot_chime_played = false;
+    } else {
+        s_ps4_boot_ms = 5000.0f;
+        s_ps4_boot_chime_played = true;
+    }
+    s_ps4_launch_active = false;
+    s_ps4_launch_ms = 0.0f;
+    s_ps4_launch_entry = NULL;
 }
 
 static bool hasEndAllSoftwareTile(void) {
@@ -1700,8 +1742,8 @@ static void drawAppTile(menuEntry_s *me, float x, float y, float w, float h,
         float t = (h - 153.0f) / 161.0f;
         if (t < 0.0f) t = 0.0f;
         if (t > 1.0f) t = 1.0f;
-        const float label_h = is_focused ? (14.0f + 33.0f * t) : 0.0f;
-        const float icon_h = h - label_h;
+        const float icon_h = (w < h) ? w : h;
+        const float label_h = h - icon_h;
         uint8_t bright = (uint8_t)(235.0f + 20.0f * t);
         renderRectF(x, y, w, h, makeRGBA(10 * bright / 255, 58 * bright / 255,
                                          158 * bright / 255, dim));
@@ -2083,7 +2125,9 @@ static void drawCarouselView(void) {
     }
 
     /* Draw unselected tiles first so the focused tile always sits on top. */
-    /* Images fade in via transition veil; avoid vertical slide. */
+    /* Sequence A: content row tiles enter at 4400..5000ms (translateY +16px -> 0, stagger 60ms) */
+    if (ps4 && s_ps4_boot_ms < 4400.0f)
+        return;
     const float slide_y = 0.0f;
     for (int i = 0; i < total_slots; i++) {
         float tx, ty, tw, th;
@@ -2092,38 +2136,51 @@ static void drawCarouselView(void) {
             continue;
         if (i == s_sel && (s_cfg.ui_style == 1 || s_focus == S2Focus_Apps))
             continue;
+        float boot_dy = 0.0f;
+        if (ps4 && s_ps4_boot_ms < 5000.0f) {
+            const float st = 4400.0f + (float)(i < 8 ? i : 8) * 60.0f;
+            const float p = segProg(s_ps4_boot_ms, st, st + 360.0f);
+            if (p <= 0.0f) continue;
+            boot_dy = (1.0f - easeOutSoft(p)) * 16.0f;
+        }
         if (i < s_visible_count)
-            drawAppTile(s_visible[i], tx, ty + slide_y, tw, th, false, 0.0f);
+            drawAppTile(s_visible[i], tx, ty + slide_y + boot_dy, tw, th, false, 0.0f);
         else
-            drawAllSoftwareEndTile(tx, ty + slide_y, tw, th, false, 0.0f);
+            drawAllSoftwareEndTile(tx, ty + slide_y + boot_dy, tw, th, false, 0.0f);
     }
 
     if ((s_cfg.ui_style == 1 || s_focus == S2Focus_Apps) &&
         s_sel >= 0 && s_sel < total_slots) {
         float tx, ty, tw, th;
         homeTileRect(s_sel, &tx, &ty, &tw, &th);
+        float sel_boot_dy = 0.0f;
+        if (ps4 && s_ps4_boot_ms < 5000.0f) {
+            const float st = 4400.0f + (float)(s_sel < 8 ? s_sel : 8) * 60.0f;
+            const float p = segProg(s_ps4_boot_ms, st, st + 360.0f);
+            sel_boot_dy = (1.0f - easeOutSoft(p)) * 16.0f;
+        }
         bool is_end_tile = (s_sel == s_visible_count);
         if (!is_end_tile) {
-            drawAppTile(s_visible[s_sel], tx, ty + slide_y, tw, th, true, s_app_pop);
+            drawAppTile(s_visible[s_sel], tx, ty + slide_y + sel_boot_dy, tw, th, true, s_app_pop);
             if (ps4 && s_focus == S2Focus_Apps) {
                 drawFocusedHeaderInfo(s_visible[s_sel], tx + tw + 16.0f,
-                                      ty + slide_y + th - 38.0f, false);
+                                      ty + slide_y + sel_boot_dy + th - 38.0f, false);
                 drawPS4Credits(s_visible[s_sel], tx + tw + 16.0f,
-                               ty + slide_y + th - 8.0f);
+                               ty + slide_y + sel_boot_dy + th - 8.0f);
             }
             else if (!ps4)
                 drawFocusedHeaderInfo(s_visible[s_sel], tx + tw * 0.5f,
                                       152.0f + slide_y, false);
         } else {
-            drawAllSoftwareEndTile(tx, ty + slide_y, tw, th, true, s_app_pop);
+            drawAllSoftwareEndTile(tx, ty + slide_y + sel_boot_dy, tw, th, true, s_app_pop);
             if (ps4 && s_focus == S2Focus_Apps)
                 drawFocusedHeaderInfo(NULL, tx + tw + 16.0f,
-                                      ty + slide_y + th - 8.0f, true);
+                                      ty + slide_y + sel_boot_dy + th - 8.0f, true);
             else if (!ps4)
                 drawFocusedHeaderInfo(NULL, tx + tw * 0.5f,
                                       162.0f + slide_y, true);
         }
-        if (ps4)
+        if (ps4 && s_ps4_boot_ms >= 4700.0f)
             drawPS4FocusFrame();
     }
 }
@@ -9745,6 +9802,20 @@ static void updateAnimations(void) {
         s_trans_t += 0.068f;
         if (s_trans_t > 1.0f) s_trans_t = 1.0f;
     }
+    if (s_ps4_boot_ms < 5000.0f) {
+        s_ps4_boot_ms += 16.6667f;
+        if (!s_ps4_boot_chime_played && s_ps4_boot_ms >= 3200.0f) {
+            s_ps4_boot_chime_played = true;
+            if (s_cfg.ps4_sounds_on)
+                switch2SfxPlay(S2Sfx_Startup);
+        }
+        if (s_ps4_boot_ms > 5000.0f) s_ps4_boot_ms = 5000.0f;
+    }
+    if (s_ps4_launch_active) {
+        s_ps4_launch_ms += 16.6667f;
+        if (s_ps4_launch_ms >= 1500.0f)
+            s_ps4_launch_ms = 1500.0f;
+    }
     /* One continuous focus value; the row is a pure function of it. */
     const float target = (float)s_sel;
     s_focus_pos += (target - s_focus_pos) * (1.0f - expf(-19.8f / 60.0f));
@@ -9775,6 +9846,153 @@ static void updateAnimations(void) {
 }
 
 /* --- Public Entry Points -------------------------------------------------- */
+
+static void drawPS4BootOverlay(void) {
+    if (s_cfg.ui_style != 1 || s_ps4_boot_ms >= 5000.0f)
+        return;
+    const float ms = s_ps4_boot_ms;
+
+    /* 0..3500ms: solid #000000; 3500..5000ms: home background fades in (0->1, EASE_SOFT) */
+    const float bg_op = easeSoft(segProg(ms, 3500.0f, 5000.0f));
+    const uint8_t black_a = (uint8_t)(255.0f * (1.0f - bg_op));
+    if (black_a > 0)
+        renderRectF(0.0f, 0.0f, SCREEN_W, SCREEN_H, makeRGBA(0, 0, 0, black_a));
+
+    /* Logo visible 1000..4200ms:
+     *   1000..2500 opacity 0->1 (EASE_OUT_SOFT)
+     *   1000..3500 scale 0.95->1.00 (EASE_OUT_SOFT)
+     *   1000..3000 soft white glow 0->24px @ 40% white (EASE_SOFT)
+     *   1800..3200 shimmer sweep left->right @ 20% white (EASE_SOFT)
+     *   3500..4200 opacity 1->0 (EASE_IN_SOFT) */
+    if (ms >= 1000.0f && ms <= 4200.0f) {
+        float logo_op = easeOutSoft(segProg(ms, 1000.0f, 2500.0f));
+        if (ms > 3500.0f)
+            logo_op *= (1.0f - easeInSoft(segProg(ms, 3500.0f, 4200.0f)));
+        const float sc = 0.95f + 0.05f * easeOutSoft(segProg(ms, 1000.0f, 3500.0f));
+        const float glow_p = easeSoft(segProg(ms, 1000.0f, 3000.0f));
+        const float cx = SCREEN_W * 0.5f;
+        const float cy = SCREEN_H * 0.5f;
+
+        /* Crisp centered white logo text ("Switchstation 2") */
+        const char *mark = "Switchstation 2";
+        uint32_t mw = 0, mh = 0;
+        GetTextDimensions(interuimedium30, mark, &mw, &mh);
+        const float lx = cx - (float)mw * 0.5f;
+        const float ly = cy + (float)mh * 0.25f;
+        const uint8_t la = (uint8_t)(255.0f * logo_op);
+        DrawText(interuimedium30, (uint32_t)lx, (uint32_t)ly, MakeColor(255, 255, 255, la), mark);
+        (void)glow_p;
+
+        /* 1800..3200ms: linear light sweep left->right across the mark (20% white) */
+        if (ms >= 1800.0f && ms <= 3200.0f) {
+            const float sp = easeSoft(segProg(ms, 1800.0f, 3200.0f));
+            const float sx = (lx - 30.0f) + sp * ((float)mw + 60.0f);
+            const uint8_t sa = (uint8_t)(51.0f * logo_op * sinf(sp * 3.14159265f));
+            renderRectF(sx, cy - 22.0f * sc, 28.0f, 44.0f * sc, makeRGBA(255, 255, 255, sa));
+        }
+    }
+}
+
+static void drawPS4LaunchOverlay(void) {
+    if (!s_ps4_launch_active || !s_ps4_launch_entry)
+        return;
+    const float ms = s_ps4_launch_ms;
+
+    /* 250..600ms: UI chrome dims out (EASE_IN_SOFT); 400..1200ms: bg dims 1->0.2 (EASE_SOFT) */
+    const float chrome_hide = easeInSoft(segProg(ms, 250.0f, 600.0f));
+    const float bg_dim = easeSoft(segProg(ms, 400.0f, 1200.0f));
+    const float cover_a = chrome_hide * 0.72f + bg_dim * 0.28f;
+    if (cover_a > 0.005f) {
+        renderRectF(0.0f, 0.0f, SCREEN_W, SCREEN_H,
+                    makeRGBA(5, 7, 15, (uint8_t)(240.0f * (cover_a > 1.0f ? 1.0f : cover_a))));
+    }
+
+    /* 0..100ms: press-in 1.12->1.09; 100..250ms: rebound 1.09->1.12;
+     * 250..1200ms: scale to cover viewport & move to center (EASE_SOFT) */
+    float sc_mul = 1.0f;
+    if (ms < 100.0f)
+        sc_mul = 1.0f - (0.03f / 1.12f) * easeSoft(segProg(ms, 0.0f, 100.0f));
+    else if (ms < 250.0f)
+        sc_mul = (1.09f / 1.12f) + (0.03f / 1.12f) * easeSoft(segProg(ms, 100.0f, 250.0f));
+
+    const float z = easeSoft(segProg(ms, 250.0f, 1200.0f));
+    const float start_w = s_ps4_launch_sw * sc_mul;
+    const float start_h = s_ps4_launch_sh * sc_mul;
+    const float start_x = s_ps4_launch_sx + (s_ps4_launch_sw - start_w) * 0.5f;
+    const float start_y = s_ps4_launch_sy + (s_ps4_launch_sh - start_h) * 0.5f;
+
+    const float target_sz = SCREEN_H; /* fit-to-screen centered cover */
+    const float target_x = (SCREEN_W - target_sz) * 0.5f;
+    const float target_y = 0.0f;
+
+    const float ix = start_x + (target_x - start_x) * z;
+    const float iy = start_y + (target_y - start_y) * z;
+    const float iw = start_w + (target_sz - start_w) * z;
+    const float ih = start_h + (target_sz - start_h) * z;
+
+    /* 800..1500ms: cover art opacity 1 -> 0 (EASE_SOFT) */
+    const float art_op = 1.0f - easeSoft(segProg(ms, 800.0f, 1500.0f));
+    const uint8_t ia = (uint8_t)(255.0f * (art_op < 0.0f ? 0.0f : art_op));
+    if (ia > 1) {
+        const uint8_t *img = NULL;
+        int img_w = 0, img_h = 0;
+        enum RenderImageFormat fmt = RenderImageFormat_Rgb24;
+        if (s_ps4_launch_entry->icon_gfx) {
+            img = s_ps4_launch_entry->icon_gfx;
+            img_w = 256; img_h = 256;
+            fmt = (s_ps4_launch_entry->icon_mode == IMAGE_MODE_RGBA32)
+                      ? RenderImageFormat_Rgba32 : RenderImageFormat_Rgb24;
+        }
+        if (img)
+            renderImageScaledF(img, img_w, img_h, ix, iy, iw, ih, fmt,
+                               ((uint32_t)ia << 24) | 0x00ffffffu);
+        else
+            renderRectF(ix, iy, iw, ih, makeRGBA(18, 52, 120, ia));
+    }
+
+    /* 1000..1500ms: #05070f loading backdrop opacity 0 -> 1 (EASE_OUT_SOFT) */
+    const float load_bg = easeOutSoft(segProg(ms, 1000.0f, 1500.0f));
+    if (load_bg > 0.01f) {
+        renderRectF(0.0f, 0.0f, SCREEN_W, SCREEN_H,
+                    makeRGBA(5, 7, 15, (uint8_t)(255.0f * load_bg)));
+    }
+
+    /* 1200..1500ms: bottom-right 10-dot ring (48px from edges, 36px diameter, 360deg/1.2s) */
+    const float ind_op = easeOutSoft(segProg(ms, 1200.0f, 1500.0f));
+    if (ind_op > 0.01f) {
+        const float rcx = SCREEN_W - 48.0f - 18.0f;
+        const float rcy = SCREEN_H - 48.0f - 18.0f;
+        const float ring_r = 15.0f;
+        const float base_ang = (ms / 1200.0f) * 6.2831853f;
+        const int dots = 10;
+        for (int d = 0; d < dots; d++) {
+            const float ang = base_ang - (float)d * (6.2831853f / (float)dots);
+            const float dx = rcx + cosf(ang) * ring_r;
+            const float dy = rcy + sinf(ang) * ring_r;
+            const float tail = 1.0f - (float)d / (float)dots;
+            const uint8_t da = (uint8_t)(255.0f * ind_op * (0.18f + 0.82f * tail));
+            renderCircleF(dx, dy, 2.6f, makeRGBA(255, 255, 255, da));
+        }
+    }
+}
+
+static void triggerEntryLaunch(menuEntry_s *me) {
+    if (!me) return;
+    if (me->type == ENTRY_TYPE_FILE && s_cfg.ui_style == 1 && s_cfg.transitions != 2) {
+        switch2SfxPlay(S2Sfx_Launch);
+        s_ps4_launch_active = true;
+        s_ps4_launch_ms = 0.0f;
+        s_ps4_launch_entry = me;
+        homeTileRect(s_sel, &s_ps4_launch_sx, &s_ps4_launch_sy, &s_ps4_launch_sw, &s_ps4_launch_sh);
+        /* Icon inside the PS4 tile is square (w x w); exclude bottom Start strip so it never stretches */
+        if (s_ps4_launch_sh > s_ps4_launch_sw)
+            s_ps4_launch_sh = s_ps4_launch_sw;
+        return;
+    }
+    switch2SfxPlay(me->type == ENTRY_TYPE_FILE ? S2Sfx_Launch : S2Sfx_Confirm);
+    launchMenuEntryTask(me);
+    syncSelectionFromMenu(menuGetCurrent());
+}
 
 static void drawTransitionVeil(void) {
     if (s_cfg.transitions == 2 || s_trans_t >= 1.0f)
@@ -9834,6 +10052,8 @@ void switch2MenuDraw(void) {
     }
 
     drawTransitionVeil();
+    drawPS4BootOverlay();
+    drawPS4LaunchOverlay();
 }
 
 bool switch2MenuUpdate(u64 down) {
@@ -9847,6 +10067,29 @@ bool switch2MenuUpdate(u64 down) {
     if (s_exit_requested) {
         s_exit_requested = false;
         return true;
+    }
+
+    /* PS4 game start animation: hold input until 1500ms Sequence B finishes, then launch */
+    if (s_ps4_launch_active) {
+        if (s_ps4_launch_ms >= 1500.0f && s_ps4_launch_entry) {
+            menuEntry_s *target = s_ps4_launch_entry;
+            s_ps4_launch_active = false;
+            s_ps4_launch_entry = NULL;
+            launchMenuEntryTask(target);
+            syncSelectionFromMenu(menuGetCurrent());
+        }
+        return false;
+    }
+
+    /* Allow skipping PS4 startup overlay with A or B */
+    if (s_cfg.ui_style == 1 && s_ps4_boot_ms < 5000.0f && (down & (HidNpadButton_A | HidNpadButton_B))) {
+        s_ps4_boot_ms = 5000.0f;
+        if (!s_ps4_boot_chime_played) {
+            s_ps4_boot_chime_played = true;
+            if (s_cfg.ps4_sounds_on)
+                switch2SfxPlay(S2Sfx_Startup);
+        }
+        return false;
     }
 
     /* Confirmation / message box handling MUST run before Settings so dialogs
@@ -10208,11 +10451,8 @@ bool switch2MenuUpdate(u64 down) {
                 s_grid_scroll_y = 0.0f;
                 menu->curEntry = s_visible_count > 0 ? s_visible_indices[0] : 0;
             } else if (s_sel < s_visible_count) {
-                switch2SfxPlay(s_visible[s_sel]->type == ENTRY_TYPE_FILE
-                                   ? S2Sfx_Launch : S2Sfx_Confirm);
                 menu->curEntry = s_visible_indices[s_sel];
-                launchMenuEntryTask(s_visible[s_sel]);
-                syncSelectionFromMenu(menuGetCurrent());
+                triggerEntryLaunch(s_visible[s_sel]);
             }
         }
         return false;
@@ -10413,8 +10653,7 @@ void switch2HandlePointer(int x, int y, bool left_click, bool right_click,
                         s_view = S2View_Grid;
                         s_sel = s_visible_count > 0 ? s_visible_count - 1 : 0;
                     } else {
-                        launchMenuEntryTask(s_visible[i]);
-                        syncSelectionFromMenu(menuGetCurrent());
+                        triggerEntryLaunch(s_visible[i]);
                     }
                 }
                 return;
@@ -10440,9 +10679,7 @@ void switch2HandlePointer(int x, int y, bool left_click, bool right_click,
                 s_sel = i;
                 menu->curEntry = s_visible_indices[i];
                 if (left_click && was_selected) {
-                    switch2SfxPlay(S2Sfx_Confirm);
-                    launchMenuEntryTask(s_visible[i]);
-                    syncSelectionFromMenu(menuGetCurrent());
+                    triggerEntryLaunch(s_visible[i]);
                 }
                 return;
             }
@@ -10642,8 +10879,7 @@ void switch2HandleTouch(menu_s *menu) {
                             s_sel = s_visible_count - 1;
                         } else {
                             menu->curEntry = s_visible_indices[i];
-                            launchMenuEntryTask(s_visible[i]);
-                            syncSelectionFromMenu(menuGetCurrent());
+                            triggerEntryLaunch(s_visible[i]);
                         }
                     } else {
                         s_focus = S2Focus_Apps;
@@ -10670,8 +10906,7 @@ void switch2HandleTouch(menu_s *menu) {
                         y1 >= (int)ty && y1 <= (int)(ty + gh)) {
                         if (s_focus == S2Focus_Apps && s_sel == i) {
                             menu->curEntry = s_visible_indices[i];
-                            launchMenuEntryTask(s_visible[i]);
-                            syncSelectionFromMenu(menuGetCurrent());
+                            triggerEntryLaunch(s_visible[i]);
                         } else {
                             s_focus = S2Focus_Apps;
                             s_sel = i;
